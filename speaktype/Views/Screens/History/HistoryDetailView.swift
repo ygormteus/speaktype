@@ -14,13 +14,13 @@ struct HistoryDetailView: View {
                 HStack(alignment: .top) {
                     Text(item.date.formatted(date: .abbreviated, time: .shortened))
                         .font(Typography.caption)
-                        .foregroundStyle(.gray)
+                        .foregroundStyle(Color.textMuted)
                     
                     Spacer()
                     
                     Text(formatDuration(item.duration))
                         .font(Typography.labelMedium)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(Color.brandAccent)
                 }
                 
                 // Badges and copy button
@@ -30,8 +30,8 @@ struct HistoryDetailView: View {
                         .font(Typography.badge)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
+                        .background(Color.brandAccent)
+                        .foregroundStyle(Color.white)
                         .cornerRadius(12)
                     
                     Spacer()
@@ -48,8 +48,8 @@ struct HistoryDetailView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
+                        .background(Color.brandAccent)
+                        .foregroundStyle(Color.white)
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
@@ -73,17 +73,17 @@ struct HistoryDetailView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "waveform")
                                     .font(.system(size: 11))
-                                    .foregroundStyle(.gray)
+                                    .foregroundStyle(Color.textMuted)
                                 Text("Recording")
                                     .font(Typography.caption)
-                                    .foregroundStyle(.gray)
+                                    .foregroundStyle(Color.textMuted)
                             }
                             
                             Spacer()
                             
                             Text(formatTime(audioPlayer.currentTime))
                                 .font(Typography.caption)
-                                .foregroundStyle(.gray)
+                                .foregroundStyle(Color.textMuted)
                                 .monospacedDigit()
                         }
                         
@@ -102,7 +102,7 @@ struct HistoryDetailView: View {
                             }) {
                                 Image(systemName: "folder")
                                     .font(.title3)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(Color.brandAccent)
                             }
                             .buttonStyle(.plain)
                             .help("Show in Finder")
@@ -113,7 +113,7 @@ struct HistoryDetailView: View {
                             Button(action: togglePlayback) {
                                 Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
                                     .font(.title2)
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(Color.brandAccent)
                             }
                             .buttonStyle(.plain)
                             
@@ -125,7 +125,7 @@ struct HistoryDetailView: View {
                             }) {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.title3)
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(Color.accentSuccess)
                             }
                             .buttonStyle(.plain)
                             .help("Restart")
@@ -133,7 +133,7 @@ struct HistoryDetailView: View {
                         .padding(.vertical, 8)
                     }
                     .padding()
-                    .background(Color.white.opacity(0.05))
+                    .background(Color.bgHover)
                     .cornerRadius(12)
                 }
                 
@@ -144,28 +144,28 @@ struct HistoryDetailView: View {
                     // Audio Duration
                     HStack {
                         Image(systemName: "waveform.circle")
-                            .foregroundStyle(.gray)
+                            .foregroundStyle(Color.textMuted)
                         Text("Audio Duration")
                             .font(Typography.bodySmall)
-                            .foregroundStyle(.gray)
+                            .foregroundStyle(Color.textMuted)
                         Spacer()
                         Text(formatDuration(item.duration))
                             .font(Typography.bodySmall)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.textPrimary)
                     }
                     
                     // Transcription Model
                     if let model = item.modelUsed {
                         HStack {
                             Image(systemName: "cpu")
-                                .foregroundStyle(.gray)
+                                .foregroundStyle(Color.textMuted)
                             Text("Transcription Model")
                                 .font(Typography.bodySmall)
-                                .foregroundStyle(.gray)
+                                .foregroundStyle(Color.textMuted)
                             Spacer()
                             Text(model)
                                 .font(Typography.bodySmall)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Color.textPrimary)
                                 .lineLimit(1)
                         }
                     }
@@ -174,14 +174,14 @@ struct HistoryDetailView: View {
                     if let transcriptionTime = item.transcriptionTime {
                         HStack {
                             Image(systemName: "clock")
-                                .foregroundStyle(.gray)
+                                .foregroundStyle(Color.textMuted)
                             Text("Transcription Time")
                                 .font(Typography.bodySmall)
-                                .foregroundStyle(.gray)
+                                .foregroundStyle(Color.textMuted)
                             Spacer()
                             Text(formatDuration(transcriptionTime))
                                 .font(Typography.bodySmall)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Color.textPrimary)
                         }
                     }
                 }

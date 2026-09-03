@@ -16,6 +16,26 @@ import SwiftUI  // for RangeReplaceableCollection.remove(atOffsets:)
 ///
 /// Replacements run fully offline as a post-processing pass on the final
 /// transcript, so they work identically for every engine (Whisper, Parakeet).
+enum DictionaryCategory: String, CaseIterable, Codable, Identifiable {
+    case general
+    case work
+    case personal
+    case medical
+    case development
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: String(localized: "General")
+        case .work: String(localized: "Work")
+        case .personal: String(localized: "Personal")
+        case .medical: String(localized: "Medical")
+        case .development: String(localized: "Development")
+        }
+    }
+}
+
 struct DictionaryEntry: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     /// What you say / what the model transcribes.
@@ -26,6 +46,38 @@ struct DictionaryEntry: Identifiable, Codable, Hashable {
     var isEnabled: Bool = true
     /// Only match when the trigger stands alone as whole words (recommended).
     var matchWholeWord: Bool = true
+    /// Lets people group rules without changing how a rule is applied.
+    var category: DictionaryCategory = .general
+
+    private enum CodingKeys: String, CodingKey {
+        case id, trigger, replacement, isEnabled, matchWholeWord, category
+    }
+
+    init(
+        id: UUID = UUID(),
+        trigger: String,
+        replacement: String,
+        isEnabled: Bool = true,
+        matchWholeWord: Bool = true,
+        category: DictionaryCategory = .general
+    ) {
+        self.id = id
+        self.trigger = trigger
+        self.replacement = replacement
+        self.isEnabled = isEnabled
+        self.matchWholeWord = matchWholeWord
+        self.category = category
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        trigger = try container.decode(String.self, forKey: .trigger)
+        replacement = try container.decode(String.self, forKey: .replacement)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        matchWholeWord = try container.decodeIfPresent(Bool.self, forKey: .matchWholeWord) ?? true
+        category = try container.decodeIfPresent(DictionaryCategory.self, forKey: .category) ?? .general
+    }
 
     var trimmedTrigger: String {
         trigger.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -87,11 +139,17 @@ final class DictionaryService: ObservableObject {
 
     // MARK: - CRUD
 
-    func addEntry(trigger: String, replacement: String, matchWholeWord: Bool = true) {
+    func addEntry(
+        trigger: String,
+        replacement: String,
+        matchWholeWord: Bool = true,
+        category: DictionaryCategory = .general
+    ) {
         let entry = DictionaryEntry(
             trigger: trigger,
             replacement: replacement,
-            matchWholeWord: matchWholeWord
+            matchWholeWord: matchWholeWord,
+            category: category
         )
         entries.insert(entry, at: 0)
         save()
@@ -117,6 +175,34 @@ final class DictionaryService: ObservableObject {
     func delete(at offsets: IndexSet) {
         entries.remove(atOffsets: offsets)
         save()
+    }
+
+    /// A portable, human-readable JSON backup. It contains only dictionary
+    /// rules and is intentionally local; the caller chooses where to save it.
+    func exportData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(entries)
+    }
+
+    /// Imports valid rules from a previously exported JSON file. Existing rules
+    /// with the same trigger and category are updated instead of duplicated.
+    @discardableResult
+    func importData(_ data: Data) throws -> Int {
+        let incoming = try JSONDecoder().decode([DictionaryEntry].self, from: data)
+        let valid = incoming.filter { !$0.trimmedTrigger.isEmpty }
+        for entry in valid {
+            if let index = entries.firstIndex(where: {
+                $0.trimmedTrigger.compare(entry.trimmedTrigger, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                    && $0.category == entry.category
+            }) {
+                entries[index] = entry
+            } else {
+                entries.append(entry)
+            }
+        }
+        save()
+        return valid.count
     }
 
     // MARK: - Persistence

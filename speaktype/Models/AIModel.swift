@@ -84,6 +84,21 @@ struct AIModel: Identifiable, Equatable {
             expectedSizeBytes: 1_400_000_000,
             minimumRAMGB: 8
         ),
+        // Converted locally with WhisperKit from the PT-BR fine-tune. It is
+        // intentionally experimental: it favors lower latency, while Large v3
+        // Turbo remains the safer choice when fidelity is more important.
+        AIModel(
+            name: "Distil-Whisper PT-BR",
+            variant: "freds0_distil-whisper-large-v3-ptbr",
+            details: "Português (Brasil) • Experimental • Baixa latência",
+            rating: "Experimental",
+            size: "1.4 GB",
+            speed: 9.0,
+            accuracy: 8.7,
+            expectedSizeBytes: 1_200_000_000,
+            minimumRAMGB: 8,
+            supportedLanguagePrefixes: ["pt"]
+        ),
         AIModel(
             name: "Whisper Medium",
             variant: "openai_whisper-medium",

@@ -279,6 +279,11 @@ struct StatisticsView: View {
                             Text("\(measurement.sampleCount) sample\(measurement.sampleCount == 1 ? "" : "s")")
                                 .font(Typography.captionSmall)
                                 .foregroundStyle(Color.textMuted)
+                            if !measurement.hasReliableSample {
+                                Text("Collecting more samples for a reliable recommendation")
+                                    .font(Typography.captionSmall)
+                                    .foregroundStyle(Color.accentWarning)
+                            }
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 2) {
@@ -289,6 +294,11 @@ struct StatisticsView: View {
                                 Text(String(format: "%.1f× real-time", realTimeFactor))
                                     .font(Typography.captionSmall)
                                     .foregroundStyle(Color.textSecondary)
+                            }
+                            if let wordsPerSecond = measurement.wordsPerSecond {
+                                Text(String(format: "%.1f words/s", wordsPerSecond))
+                                    .font(Typography.captionSmall)
+                                    .foregroundStyle(Color.textMuted)
                             }
                         }
                     }

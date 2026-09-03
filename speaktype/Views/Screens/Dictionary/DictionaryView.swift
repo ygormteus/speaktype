@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Manage custom word replacements and spoken snippets.
 ///
@@ -11,6 +13,20 @@ struct DictionaryView: View {
     @State private var editorEntry: DictionaryEntry?
     @State private var isPresentingEditor = false
     @State private var entryPendingDeletion: DictionaryEntry?
+    @State private var selectedCategory: DictionaryCategory?
+    @State private var searchText = ""
+    @State private var importResult: String?
+
+    private var displayedEntries: [DictionaryEntry] {
+        dictionary.entries.filter { entry in
+            let matchesCategory = selectedCategory.map { entry.category == $0 } ?? true
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let matchesQuery = query.isEmpty
+                || entry.trigger.localizedCaseInsensitiveContains(query)
+                || entry.replacement.localizedCaseInsensitiveContains(query)
+            return matchesCategory && matchesQuery
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -26,8 +42,9 @@ struct DictionaryView: View {
                 if dictionary.entries.isEmpty {
                     emptyState
                 } else {
+                    controls
                     VStack(spacing: 12) {
-                        ForEach(dictionary.entries) { entry in
+                        ForEach(displayedEntries) { entry in
                             DictionaryRuleCard(
                                 entry: entry,
                                 onToggle: { dictionary.setEnabled($0, for: entry.id) },
@@ -49,7 +66,8 @@ struct DictionaryView: View {
                     dictionary.addEntry(
                         trigger: result.trigger,
                         replacement: result.replacement,
-                        matchWholeWord: result.matchWholeWord
+                        matchWholeWord: result.matchWholeWord,
+                        category: result.category
                     )
                 }
             }
@@ -69,6 +87,13 @@ struct DictionaryView: View {
             }
         } message: { entry in
             Text("“\(entry.trimmedTrigger)” will no longer be replaced.")
+        }
+        .alert("Dictionary", isPresented: Binding(
+            get: { importResult != nil }, set: { if !$0 { importResult = nil } }
+        )) {
+            Button("OK", role: .cancel) { importResult = nil }
+        } message: {
+            Text(importResult ?? "")
         }
     }
 
@@ -141,6 +166,19 @@ struct DictionaryView: View {
 
             Spacer()
 
+            Menu {
+                Button("Import rules…", action: importRules)
+                Button("Export rules…", action: exportRules)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.textSecondary)
+                    .frame(width: 32, height: 32)
+                    .background(Color.bgHover)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .menuStyle(.borderlessButton)
+
             Button(action: { present(nil) }) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
@@ -158,6 +196,30 @@ struct DictionaryView: View {
         }
         .padding(.horizontal, 24)
         .padding(.top, 20)
+    }
+
+    private var controls: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                TextField("Search rules", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Category", selection: $selectedCategory) {
+                    Text("All categories").tag(DictionaryCategory?.none)
+                    ForEach(DictionaryCategory.allCases) { category in
+                        Text(category.title).tag(Optional(category))
+                    }
+                }
+                .frame(width: 150)
+            }
+
+            if displayedEntries.isEmpty {
+                Text("No rules match this filter.")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Color.textMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 24)
     }
 
     // MARK: - Explainer
@@ -233,6 +295,34 @@ struct DictionaryView: View {
         editorEntry = entry
         isPresentingEditor = true
     }
+
+    private func exportRules() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "SpeakType Dictionary.json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try dictionary.exportData().write(to: url, options: .atomic)
+            importResult = String(localized: "Dictionary exported successfully.")
+        } catch {
+            importResult = String(localized: "Could not export the dictionary.")
+        }
+    }
+
+    private func importRules() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let count = try dictionary.importData(Data(contentsOf: url))
+            importResult = String(
+                format: String(localized: "Imported %d dictionary rules."), count)
+        } catch {
+            importResult = String(localized: "Could not import this dictionary file.")
+        }
+    }
 }
 
 // MARK: - Rule Card
@@ -273,6 +363,7 @@ private struct DictionaryRuleCard: View {
 
             // Attribute chips
             HStack(spacing: 6) {
+                RuleChip(text: entry.category.title)
                 if !entry.matchWholeWord {
                     RuleChip(text: "partial")
                 }
@@ -354,6 +445,7 @@ private struct DictionaryEntryEditor: View {
     @State private var trigger: String
     @State private var replacement: String
     @State private var matchWholeWord: Bool
+    @State private var category: DictionaryCategory
 
     init(entry: DictionaryEntry?, onSave: @escaping (DictionaryEntry) -> Void) {
         self.entry = entry
@@ -361,6 +453,7 @@ private struct DictionaryEntryEditor: View {
         _trigger = State(initialValue: entry?.trigger ?? "")
         _replacement = State(initialValue: entry?.replacement ?? "")
         _matchWholeWord = State(initialValue: entry?.matchWholeWord ?? true)
+        _category = State(initialValue: entry?.category ?? .general)
     }
 
     private var isValid: Bool {
@@ -408,6 +501,12 @@ private struct DictionaryEntryEditor: View {
                     }
                 }
                 .toggleStyle(.switch)
+
+                Picker("Category", selection: $category) {
+                    ForEach(DictionaryCategory.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
             }
 
             Spacer(minLength: 24)
@@ -477,6 +576,7 @@ private struct DictionaryEntryEditor: View {
         result.trigger = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
         result.replacement = replacement
         result.matchWholeWord = matchWholeWord
+        result.category = category
         onSave(result)
         dismiss()
     }

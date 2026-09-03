@@ -59,14 +59,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup dynamic hotkey monitoring based on user selection
         setupHotkeyMonitoring()
 
-        checkForUpdatesOnLaunch()
-
-        UpdateService.shared.showUpdateWindowPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.showUpdateWindow()
-            }
-            .store(in: &cancellables)
+        // This fork is distributed as an unsigned local beta. It must never
+        // query or install releases published by the original project.
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

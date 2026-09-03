@@ -6,6 +6,9 @@ import Security
 /// Service to check for app updates and manage update preferences
 class UpdateService: NSObject, ObservableObject {
     static let shared = UpdateService()
+    /// Automatic updates are deliberately unavailable in the unsigned fork.
+    /// A future signed/notarized distribution can opt in with its own endpoint.
+    static let isEnabled = ForkDistribution.automaticUpdatesEnabled
     static let trustedUpdateBundleIdentifier = "com.2048labs.speaktype"
     static let trustedUpdateTeamIdentifier = "PCV4UMSRZX"
 
@@ -43,6 +46,7 @@ class UpdateService: NSObject, ObservableObject {
 
     /// Check for updates from server
     func checkForUpdates(silent: Bool = false) async {
+        guard Self.isEnabled else { return }
         guard !isCheckingForUpdates else { return }
 
         await MainActor.run { isCheckingForUpdates = true }
@@ -79,6 +83,7 @@ class UpdateService: NSObject, ObservableObject {
 
     /// Check if enough time has passed since last check (24 hours)
     func shouldCheckForUpdates() -> Bool {
+        guard Self.isEnabled else { return false }
         guard let lastCheck = lastCheckDate else { return true }
         return Date().timeIntervalSince(lastCheck) / 3600 >= 24
     }

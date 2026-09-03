@@ -35,8 +35,10 @@ struct ModelPerformance: Identifiable, Hashable {
     let sampleCount: Int
     let averageTranscriptionTime: TimeInterval
     let realTimeFactor: Double?
+    let wordsPerSecond: Double?
 
     var id: String { modelName }
+    var hasReliableSample: Bool { sampleCount >= 3 }
 }
 
 class HistoryService: ObservableObject {
@@ -146,11 +148,15 @@ class HistoryService: ObservableObject {
         return grouped.map { modelName, entries in
             let totalTime = entries.reduce(0) { $0 + ($1.transcriptionTime ?? 0) }
             let totalAudio = entries.reduce(0) { $0 + $1.duration }
+            let totalWords = entries.reduce(0) { partial, item in
+                partial + item.transcript.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+            }
             return ModelPerformance(
                 modelName: modelName,
                 sampleCount: entries.count,
                 averageTranscriptionTime: totalTime / Double(entries.count),
-                realTimeFactor: totalTime > 0 && totalAudio > 0 ? totalAudio / totalTime : nil
+                realTimeFactor: totalTime > 0 && totalAudio > 0 ? totalAudio / totalTime : nil,
+                wordsPerSecond: totalTime > 0 ? Double(totalWords) / totalTime : nil
             )
         }
         .sorted { $0.averageTranscriptionTime < $1.averageTranscriptionTime }

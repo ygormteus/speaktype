@@ -7,7 +7,7 @@
 **Fast, Offline Voice-to-Text for macOS**
 
 ![SpeakType app screenshot](image.png)
-[![Download](https://img.shields.io/badge/Download-SpeakType.dmg-blueviolet?logo=apple&logoColor=white)](https://github.com/karansinghgit/speaktype/releases/latest)
+[![Fork](https://img.shields.io/badge/Fork-ygormteus%2Fspeaktype-blueviolet?logo=github)](https://github.com/ygormteus/speaktype)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange?logo=swift)](https://swift.org)
 [![Platform](https://img.shields.io/badge/Platform-macOS%2013.0+-blue?logo=apple)](https://www.apple.com/macos/)
 [![License](https://img.shields.io/badge/License-MIT-red)](LICENSE)
@@ -39,7 +39,7 @@ SpeakType is a **privacy-first, offline voice dictation tool** for macOS. Unlike
 
 ### Download
 
-**[Download Latest Release](https://github.com/karansinghgit/speaktype/releases/latest)**
+**[Open this fork](https://github.com/ygormteus/speaktype)**
 
 1. Download `SpeakType.dmg`
 2. Drag **SpeakType** to **Applications**
@@ -51,7 +51,7 @@ Press `fn` to start dictating.
 ### Build from Source
 
 ```bash
-git clone https://github.com/karansinghgit/speaktype.git
+git clone https://github.com/ygormteus/speaktype.git
 cd speaktype
 make run-local
 ```

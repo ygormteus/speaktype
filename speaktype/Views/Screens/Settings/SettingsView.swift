@@ -109,6 +109,8 @@ struct GeneralSettingsTab: View {
     @AppStorage("enableAutoEdit") private var enableAutoEdit: Bool = false
     @AppStorage(DictationFormattingProfile.defaultsKey)
     private var dictationFormattingProfile: DictationFormattingProfile = .smart
+    @AppStorage(DictationProfile.defaultsKey)
+    private var selectedDictationProfile: DictationProfile = .portugueseNatural
     @AppStorage(LocalPunctuationFormatter.spokenPunctuationDefaultsKey)
     private var spokenPunctuationEnabled: Bool = true
     @AppStorage(LocalPunctuationFormatter.terminalPunctuationDefaultsKey)
@@ -119,6 +121,9 @@ struct GeneralSettingsTab: View {
     private var onDeviceFormattingBeforeAutoPaste: Bool = false
     @AppStorage(SmartTrailingPunctuation.defaultsKey)
     private var smartTrailingPunctuation: Bool = true
+    @AppStorage(VoiceCommandProcessor.defaultsKey)
+    private var voiceCommandsEnabled: Bool = true
+    @State private var profileApplicationMessage = ""
 
     private var recentLanguageCodes: [String] {
         recentLanguagesString.split(separator: ",").map(String.init).filter { !$0.isEmpty }
@@ -130,12 +135,6 @@ struct GeneralSettingsTab: View {
         recents.insert(code, at: 0)
         recentLanguagesString = recents.prefix(5).joined(separator: ",")
     }
-
-    @StateObject private var updateService = UpdateService.shared
-    @EnvironmentObject var licenseManager: LicenseManager
-
-    @State private var showLicenseSheet = false
-    @State private var showDeactivateAlert = false
 
     var body: some View {
         ScrollView {
@@ -162,7 +161,7 @@ struct GeneralSettingsTab: View {
                     HStack(spacing: 20) {
                         ForEach(AppTheme.allCases) { theme in
                             RadioButton(
-                                title: theme.rawValue,
+                                title: theme.localizedTitle,
                                 isSelected: appTheme == theme,
                                 action: { appTheme = theme }
                             )
@@ -350,6 +349,65 @@ struct GeneralSettingsTab: View {
                 // Transcript Cleanup
                 SettingsSection {
                     SettingsSectionHeader(
+                        icon: "slider.horizontal.3",
+                        title: "Dictation profiles",
+                        subtitle: "Apply local settings for a common workflow"
+                    )
+
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 10
+                    ) {
+                        ForEach(DictationProfile.allCases) { profile in
+                            Button { apply(profile) } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: profile.icon)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .frame(width: 18)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(profile.title)
+                                            .font(Typography.labelMedium)
+                                        Text(profile.detail)
+                                            .font(Typography.captionSmall)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .foregroundStyle(
+                                    selectedDictationProfile == profile
+                                        ? Color.textPrimary : Color.textSecondary
+                                )
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    selectedDictationProfile == profile
+                                        ? Color.bgSelected : Color.bgHover.opacity(0.45)
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(
+                                            selectedDictationProfile == profile
+                                                ? Color.brandAccent.opacity(0.45) : Color.border.opacity(0.45),
+                                            lineWidth: 1
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(profile.title)
+                        }
+                    }
+
+                    if !profileApplicationMessage.isEmpty {
+                        Text(profileApplicationMessage)
+                            .font(Typography.captionSmall)
+                            .foregroundStyle(Color.textMuted)
+                    }
+                }
+
+                SettingsSection {
+                    SettingsSectionHeader(
                         icon: "wand.and.stars",
                         title: "Transcript Cleanup",
                         subtitle: "Lightweight post-processing for dictation"
@@ -375,6 +433,22 @@ struct GeneralSettingsTab: View {
                                 .font(Typography.captionSmall)
                                 .foregroundStyle(Color.textMuted)
                             Text("Formatting stays entirely on this Mac. It never sends your transcript to an AI service.")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Voice editing commands")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Toggle("", isOn: $voiceCommandsEnabled)
+                                    .labelsHidden()
+                            }
+                            Text("Say “novo parágrafo”, “nova linha” or “próximo item” to format while dictating. “Apagar última frase” and “limpar texto” work only at the end of a dictation.")
                                 .font(Typography.captionSmall)
                                 .foregroundStyle(Color.textMuted)
                         }
@@ -565,98 +639,46 @@ struct GeneralSettingsTab: View {
                         .padding(.top, 4)
                 }
 
-                // Updates
+                // Distribution
                 SettingsSection {
                     SettingsSectionHeader(
-                        icon: "arrow.down.circle", title: "Updates",
+                        icon: "info.circle", title: "About this beta",
                         subtitle: "SpeakType \(AppVersion.currentVersion)")
 
-                    VStack(spacing: 16) {
-                        HStack {
-                            Text("Automatically check for updates")
-                                .font(Typography.bodyMedium)
-                                .foregroundStyle(Color.textPrimary)
-                            Spacer()
-                            Toggle("", isOn: $autoUpdate)
-                                .labelsHidden()
-                        }
-
-                        Button(action: {
-                            Task {
-                                await updateService.checkForUpdates()
-                            }
-                        }) {
-                            HStack(spacing: 6) {
-                                if updateService.isCheckingForUpdates {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .frame(width: 14, height: 14)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 12))
-                                }
-                                Text(
-                                    updateService.isCheckingForUpdates
-                                        ? "Checking..." : "Check for Updates"
-                                )
-                                .font(Typography.labelMedium)
-                            }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Modified distribution by Ygor Mateus")
+                            .font(Typography.bodyMedium)
                             .foregroundStyle(Color.textPrimary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(Color.bgHover)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(updateService.isCheckingForUpdates)
+                        Text("Based on SpeakType, © 2026 Karan Singh — MIT License.")
+                            .font(Typography.captionSmall)
+                            .foregroundStyle(Color.textSecondary)
+                        Text("Updates are installed manually in this local beta. It never checks the original project for updates.")
+                            .font(Typography.captionSmall)
+                            .foregroundStyle(Color.textMuted)
+                        Link("View fork source", destination: ForkDistribution.sourceRepositoryURL)
+                            .font(Typography.captionSmall)
                     }
                 }
-
-                // License - Hidden (logic kept for future use)
-                // SettingsSection {
-                //     SettingsSectionHeader(
-                //         icon: "key",
-                //         title: "License",
-                //         subtitle: licenseManager.isPro ? "Pro Active" : "Free Plan"
-                //     )
-                //
-                //     if licenseManager.isPro {
-                //         Button(action: { showDeactivateAlert = true }) {
-                //             Text("Deactivate License")
-                //                 .font(Typography.labelMedium)
-                //                 .frame(maxWidth: .infinity)
-                //         }
-                //         .buttonStyle(.stSecondary)
-                //     } else {
-                //         Button(action: { showLicenseSheet = true }) {
-                //             Text("Activate License")
-                //                 .font(Typography.labelMedium)
-                //                 .frame(maxWidth: .infinity)
-                //         }
-                //         .buttonStyle(.stPrimary)
-                //     }
-                // }
             }
             .padding(24)
         }
-
-        .sheet(isPresented: $showLicenseSheet) {
-            LicenseView()
-                .environmentObject(licenseManager)
-        }
-        .alert("Deactivate License", isPresented: $showDeactivateAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Deactivate", role: .destructive) {
-                Task { try? await licenseManager.deactivateLicense() }
-            }
-        } message: {
-            Text("Are you sure you want to deactivate your Pro license?")
-        }
     }
 
-    private func displayName(for code: String) -> String {
-        if code == "auto" { return "Auto-detect" }
-        return Self.whisperLanguages.first(where: { $0.code == code })?.name ?? code
+    private func apply(_ profile: DictationProfile) {
+        let changedModel = profile.apply()
+        selectedDictationProfile = profile
+        profileApplicationMessage = changedModel
+            ? String(localized: "Profile applied, including its preferred downloaded model.")
+            : String(localized: "Profile applied. Download its suggested model from AI Models to use it automatically.")
+    }
+
+    private func displayName(for code: String) -> LocalizedStringKey {
+        switch code {
+        case "auto": "Auto-detect"
+        case "pt": "Portuguese"
+        case "en": "English"
+        default: LocalizedStringKey(Self.whisperLanguages.first(where: { $0.code == code })?.name ?? code)
+        }
     }
 
     // All languages supported by Whisper, sorted alphabetically
@@ -819,8 +841,8 @@ struct PermissionsSettingsTab: View {
 
 struct SettingsSectionHeader: View {
     let icon: String
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
 
     var body: some View {
         HStack(spacing: 12) {
@@ -859,7 +881,7 @@ struct SettingsSection<Content: View>: View {
 }
 
 struct ToggleRow: View {
-    let title: String
+    let title: LocalizedStringKey
     @Binding var isOn: Bool
 
     var body: some View {
@@ -875,9 +897,21 @@ struct ToggleRow: View {
 }
 
 struct RadioButton: View {
-    let title: String
+    private let title: Text
     let isSelected: Bool
     let action: () -> Void
+
+    init(title: LocalizedStringKey, isSelected: Bool, action: @escaping () -> Void) {
+        self.title = Text(title)
+        self.isSelected = isSelected
+        self.action = action
+    }
+
+    init(title: String, isSelected: Bool, action: @escaping () -> Void) {
+        self.title = Text(verbatim: title)
+        self.isSelected = isSelected
+        self.action = action
+    }
 
     var body: some View {
         Button(action: action) {
@@ -896,7 +930,7 @@ struct RadioButton: View {
                     }
                 }
 
-                Text(title)
+                title
                     .font(Typography.bodyMedium)
                     .foregroundStyle(Color.textPrimary)
             }
@@ -909,8 +943,8 @@ struct RadioButton: View {
 struct SettingsPermissionItem: View {
     let icon: String
     let color: Color
-    let title: String
-    let desc: String
+    let title: LocalizedStringKey
+    let desc: LocalizedStringKey
     let isGranted: Bool
     let action: () -> Void
 
@@ -967,4 +1001,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
     case system = "System"
 
     var id: String { rawValue }
+
+    var localizedTitle: LocalizedStringKey {
+        switch self {
+        case .light: "Light"
+        case .dark: "Dark"
+        case .system: "System"
+        }
+    }
 }

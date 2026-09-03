@@ -10,8 +10,10 @@
 # ── Identity & signing ────────────────────────────────────────────────────────
 APP_BUNDLE_ID="com.2048labs.speaktype"
 DEV_BUNDLE_ID="com.2048labs.speaktype.dev"
-APPLE_ID="mail2048labs@gmail.com"
-APPLE_TEAM_ID="${APPLE_TEAM_ID:-PCV4UMSRZX}"
+# A signed release is intentionally opt-in. Set these in your shell only after
+# enrolling in the Apple Developer Program; never commit credentials here.
+APPLE_ID="${APPLE_ID:-}"
+APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
 NOTARY_PROFILE="AC_PASSWORD"          # xcrun notarytool --keychain-profile name
 SIGN_IDENTITY="Developer ID Application"
 
@@ -19,7 +21,7 @@ SIGN_IDENTITY="Developer ID Application"
 SCHEME="speaktype"
 PROJECT_FILE="speaktype.xcodeproj/project.pbxproj"
 CHANGELOG="CHANGELOG.md"
-GITHUB_REPO="karansinghgit/speaktype"
+GITHUB_REPO="${GITHUB_REPO:-ygormteus/speaktype}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,11 @@ resolve_version() {
 # Ensure notarization credentials exist in the keychain, prompting once for an
 # app-specific password if the profile is missing.
 ensure_notary_credentials() {
+  if [ -z "$APPLE_ID" ] || [ -z "$APPLE_TEAM_ID" ]; then
+    echo "❌ Apple Developer credentials are not configured for this fork."
+    echo "   This local beta is distributed manually; do not run a notarized release yet."
+    exit 1
+  fi
   if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" &>/dev/null; then
     return 0
   fi

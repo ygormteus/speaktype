@@ -141,8 +141,8 @@ extension Color {
             name: "textMuted",
             dynamicProvider: { appearance in
                 appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                    ? NSColor(hex: "707070")
-                    : NSColor(hex: "9A9A9A")
+                    ? NSColor(hex: "A8A8A8")
+                    : NSColor(hex: "686868")
             }))
 
     static let textDisabled = Color(

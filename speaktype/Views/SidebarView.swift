@@ -28,23 +28,13 @@ struct SidebarView: View {
 
             Spacer()
 
-            // 2048 Labs branding link
-            Button(action: {
-                NSWorkspace.shared.open(URL(string: "https://2048labs.com")!)
-            }) {
-                Text("2048 LABS")
-                    .font(.system(size: 16, weight: .medium, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Color.textMuted.opacity(0.25))
+            VStack(spacing: 2) {
+                Text("Modified distribution by Ygor Mateus")
+                    .font(.system(size: 10, weight: .medium))
+                Text("MIT · SpeakType")
+                    .font(.system(size: 9, design: .monospaced))
             }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                if hovering {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
+            .foregroundStyle(Color.textMuted.opacity(0.65))
             .padding(.bottom, 6)
 
             // Build version indicator — debug only, never shown in production

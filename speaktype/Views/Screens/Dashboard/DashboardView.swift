@@ -11,10 +11,6 @@ struct DashboardView: View {
     private var transcription: TranscriptionManager { TranscriptionManager.shared }
     @State private var leftColumnHeight: CGFloat = 0
 
-    // Trial & License
-    @EnvironmentObject var trialManager: TrialManager
-    @EnvironmentObject var licenseManager: LicenseManager
-
     @AppStorage(ModelSelection.defaultsKey) private var selectedModel: String = ModelSelection.none
     @AppStorage("transcriptionLanguage") private var transcriptionLanguage: String = "auto"
     @State private var showFileImporter = false
@@ -43,7 +39,7 @@ struct DashboardView: View {
         historyService.totalDuration()
     }
 
-    var timeBasedGreeting: String {
+    var timeBasedGreeting: LocalizedStringKey {
         let hour = Calendar.current.component(.hour, from: Date())
         switch hour {
         case 6..<12: return "Good morning,"
@@ -72,11 +68,6 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                // Trial Banner - Hidden (logic kept for future use)
-                // if !licenseManager.isPro {
-                //     TrialBanner(status: trialManager.trialStatus)
-                // }
-
                 // Two horizontal boxes: Stats + Activity Chart
                 HStack(alignment: .top, spacing: 20) {
                     // Left: Stats Card
@@ -102,7 +93,7 @@ struct DashboardView: View {
                                 .foregroundStyle(Color.textPrimary)
 
                             if !historyService.items.isEmpty {
-                                Text("\(historyService.items.count) total transcriptions")
+                                (Text("\(historyService.items.count) ") + Text("total transcriptions"))
                                     .font(Typography.caption)
                                     .foregroundStyle(Color.textMuted)
                             }
@@ -284,7 +275,7 @@ struct DashboardView: View {
 // MARK: - Stats Card
 
 struct StatsCard: View {
-    let greeting: String
+    let greeting: LocalizedStringKey
     let wordCount: Int
     let timeSaved: Int
     let todayCount: Int
@@ -430,7 +421,7 @@ struct ActivityChartCard: View {
 
 struct StatBlock: View {
     let value: String
-    let label: String
+    let label: LocalizedStringKey
     let icon: String
 
     var body: some View {

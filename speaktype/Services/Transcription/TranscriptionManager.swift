@@ -223,8 +223,9 @@ class TranscriptionManager {
         let punctuated = LocalPunctuationFormatter.apply(
             to: contextuallyPunctuated ?? dictionaryAdjusted, language: language)
         let normalized = PortugueseTextNormalizer.apply(to: punctuated, language: language)
-        return LocalTranscriptFormatter.apply(
+        let formatted = LocalTranscriptFormatter.apply(
             to: SmartTrailingPunctuation.apply(to: normalized), language: language)
+        return VoiceCommandProcessor.apply(to: formatted, language: language)
     }
 }
 
