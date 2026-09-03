@@ -27,6 +27,18 @@ struct HistoryItem: Identifiable, Codable, Hashable {
     }
 }
 
+/// Locally observed performance for a transcription model. It intentionally
+/// uses only completed history entries, so no audio or transcript leaves the
+/// Mac to calculate the result.
+struct ModelPerformance: Identifiable, Hashable {
+    let modelName: String
+    let sampleCount: Int
+    let averageTranscriptionTime: TimeInterval
+    let realTimeFactor: Double?
+
+    var id: String { modelName }
+}
+
 class HistoryService: ObservableObject {
     static let shared = HistoryService()
     
@@ -119,6 +131,29 @@ class HistoryService: ObservableObject {
     
     func statsEntries(since startDate: Date) -> [HistoryStatsEntry] {
         filteredStatsEntries(since: startDate)
+    }
+
+    func modelPerformance(since startDate: Date? = nil) -> [ModelPerformance] {
+        let measured = items.filter { item in
+            guard let model = item.modelUsed,
+                  !model.isEmpty,
+                  let transcriptionTime = item.transcriptionTime,
+                  transcriptionTime > 0
+            else { return false }
+            return startDate.map { item.date >= $0 } ?? true
+        }
+        let grouped = Dictionary(grouping: measured, by: { $0.modelUsed! })
+        return grouped.map { modelName, entries in
+            let totalTime = entries.reduce(0) { $0 + ($1.transcriptionTime ?? 0) }
+            let totalAudio = entries.reduce(0) { $0 + $1.duration }
+            return ModelPerformance(
+                modelName: modelName,
+                sampleCount: entries.count,
+                averageTranscriptionTime: totalTime / Double(entries.count),
+                realTimeFactor: totalTime > 0 && totalAudio > 0 ? totalAudio / totalTime : nil
+            )
+        }
+        .sorted { $0.averageTranscriptionTime < $1.averageTranscriptionTime }
     }
     
     private func saveHistory() {

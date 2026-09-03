@@ -1,6 +1,6 @@
 # Makefile for SpeakType
 
-.PHONY: help build clean clean-dev test lint format ci run run-dev run-release setup logs logs-live logs-errors logs-export install uninstall reinstall
+.PHONY: help build build-local clean clean-dev test lint format ci run run-local run-dev run-release setup logs logs-live logs-errors logs-export install uninstall reinstall
 
 # Default target
 help:
@@ -10,6 +10,7 @@ help:
 	@echo "  make setup         - Initial project setup"
 	@echo "  make build         - Build the project (Debug)"
 	@echo "  make run           - Run the application"
+	@echo "  make run-local     - Build unsigned in a stable local path and run it"
 	@echo "  make run-dev       - Build and run SpeakType-Dev.app"
 	@echo "  make clean         - Clean build artifacts"
 	@echo "  make clean-dev     - 🧹 Clean ALL app data & permissions (fresh start)"
@@ -64,9 +65,17 @@ stamp-build-info:
 	echo "let buildTimestamp = \"$$TIMESTAMP\"" >> speaktype/Constants/BuildInfo.swift
 
 # Build the project
-build: stamp-build-info
+build:
 	@echo "Building SpeakType..."
 	xcodebuild -scheme speaktype -configuration Debug build
+
+# A stable unsigned build for day-to-day local testing. Keeping the app path
+# fixed avoids macOS treating every temporary DerivedData build as a different
+# Accessibility permission target.
+build-local:
+	@echo "Building SpeakType locally (without signing)..."
+	@xcodebuild -project speaktype.xcodeproj -scheme speaktype -configuration Debug \
+		-derivedDataPath build/local-derived CODE_SIGNING_ALLOWED=NO
 
 # Build for release
 build-release:
@@ -79,13 +88,16 @@ run-release:
 	@open $$(find ~/Library/Developer/Xcode/DerivedData/speaktype-*/Build/Products/Release -name "speaktype.app" -type d | head -1)
 
 # Run the application
-run: stamp-build-info
+run:
 	@echo "Running SpeakType..."
 	@xcodebuild -scheme speaktype -configuration Debug build 2>&1 | grep -E "(error:|BUILD)" || true
 	@open $$(find ~/Library/Developer/Xcode/DerivedData/speaktype-*/Build/Products/Debug -name "speaktype.app" -type d | head -1)
 
+run-local: build-local
+	@open "$(CURDIR)/build/local-derived/Build/Products/Debug/speaktype.app"
+
 # Run the current checkout as a separate dev app identity
-run-dev: stamp-build-info
+run-dev:
 	@./scripts/run-dev.sh
 
 # Run all tests

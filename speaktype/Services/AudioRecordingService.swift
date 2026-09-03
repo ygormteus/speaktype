@@ -8,7 +8,12 @@ class AudioRecordingService: NSObject, ObservableObject {
 
     // Chunk publisher: emits the URL of each completed ~4-second audio chunk while recording
     let chunkPublisher = PassthroughSubject<URL, Never>()
-    private static let chunkDuration: TimeInterval = 4.0
+    let livePCMChunkPublisher = PassthroughSubject<[Float], Never>()
+    private static let defaultChunkDuration: TimeInterval = 4.0
+    private var chunkDuration: TimeInterval = defaultChunkDuration
+    private var directStreamingEnabled = false
+    private var directStreamingSamples: [Float] = []
+    private static let directStreamingChunkSamples = 8_960  // 560 ms at 16 kHz
 
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0
@@ -53,6 +58,28 @@ class AudioRecordingService: NSObject, ObservableObject {
     private var smoothedAudioFrequency: Float = 0.0
 
     private let audioQueue = DispatchQueue(label: "com.speaktype.audioQueue")
+    private let microphoneAuthorizationStatus: () -> AVAuthorizationStatus
+    private let requestMicrophoneAccess: (@escaping (Bool) -> Void) -> Void
+
+    /// Batch models do not need frequent chunk files. A streaming engine can
+    /// request shorter chunks before recording starts to lower partial-text
+    /// latency without changing the final recording quality.
+    func setChunkDuration(_ duration: TimeInterval) {
+        audioQueue.async {
+            self.chunkDuration = max(0.25, duration)
+        }
+    }
+
+    func restoreDefaultChunkDuration() {
+        setChunkDuration(Self.defaultChunkDuration)
+    }
+
+    func setDirectStreamingEnabled(_ enabled: Bool) {
+        audioQueue.async {
+            self.directStreamingEnabled = enabled
+            self.directStreamingSamples.removeAll(keepingCapacity: true)
+        }
+    }
 
     private func validatedAudioFileURL(
         at url: URL,
@@ -118,7 +145,16 @@ class AudioRecordingService: NSObject, ObservableObject {
         isRotatingChunk = false
     }
 
-    override init() {
+    init(
+        microphoneAuthorizationStatus: @escaping () -> AVAuthorizationStatus = {
+            AVCaptureDevice.authorizationStatus(for: .audio)
+        },
+        requestMicrophoneAccess: @escaping (@escaping (Bool) -> Void) -> Void = {
+            AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0)
+        }
+    ) {
+        self.microphoneAuthorizationStatus = microphoneAuthorizationStatus
+        self.requestMicrophoneAccess = requestMicrophoneAccess
         super.init()
         // Restore the persisted device before discovery completes; AVCaptureDevice(uniqueID:)
         // resolves it directly, and fetchAvailableDevices() falls back if it is gone.
@@ -203,6 +239,8 @@ class AudioRecordingService: NSObject, ObservableObject {
         // interleaved PCM keeps the meter fed regardless of what else holds the mic.
         audioOutput?.audioSettings = [
             AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 16_000.0,
+            AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsBigEndianKey: false,
@@ -244,10 +282,10 @@ class AudioRecordingService: NSObject, ObservableObject {
         }
     }
 
-    func startRecording() {
-        requestPermission()
-
-        guard !isRecording else { return }
+    @MainActor
+    func startRecording() async -> Bool {
+        guard !isRecording else { return false }
+        guard await hasMicrophoneAccess() else { return false }
         if captureSession == nil { setupSession() }
 
         // 1. Reset flags and stale writer state before any new samples arrive.
@@ -256,6 +294,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         liveWaveSamples = []
         resetMainWriterState()
         resetChunkWriterState()
+        directStreamingSamples.removeAll(keepingCapacity: true)
         isRecording = true
         recordingStartTime = Date()
         // Hop onto audioQueue: idleSessionStopWorkItem is only ever touched there,
@@ -332,6 +371,8 @@ class AudioRecordingService: NSObject, ObservableObject {
                 }
             }
         }
+
+        return true
     }
 
     func stopRecording(discardOutput: Bool = false) async -> URL? {
@@ -367,6 +408,9 @@ class AudioRecordingService: NSObject, ObservableObject {
                 let finishGroup = DispatchGroup()
                 var finalizedRecordingURL: URL?
                 let discardOutput = self.shouldDiscardCurrentRecordingOutput
+                if self.directStreamingEnabled, !discardOutput {
+                    self.flushDirectStreamingSamples()
+                }
 
                 if let lastChunkInput = self.chunkAssetWriterInput,
                     let lastChunkWriter = self.chunkAssetWriter,
@@ -437,13 +481,19 @@ class AudioRecordingService: NSObject, ObservableObject {
         }
     }
 
-    func requestPermission() {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: break
+    private func hasMicrophoneAccess() async -> Bool {
+        switch microphoneAuthorizationStatus() {
+        case .authorized:
+            return true
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            return await withCheckedContinuation { continuation in
+                requestMicrophoneAccess { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
         default:
             print("Microphone access denied")
+            return false
         }
     }
 
@@ -545,6 +595,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
     // MARK: - Chunk Writer Helpers (audioQueue)
 
     private func appendToChunk(sampleBuffer: CMSampleBuffer, pts: CMTime) {
+        guard !directStreamingEnabled else { return }
         guard !isStopping else { return }
 
         // Initialize first chunk on first buffer
@@ -570,7 +621,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
         // Rotate chunk after chunkDuration seconds
         guard !isRotatingChunk,
             let start = chunkStartTime,
-            Date().timeIntervalSince(start) >= Self.chunkDuration
+            Date().timeIntervalSince(start) >= chunkDuration
         else { return }
 
         rotateChunk(nextStartPTS: pts)
@@ -715,6 +766,12 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
                 guard sampleCount > 0 else { continue }
 
                 let samples = data.assumingMemoryBound(to: Int16.self)
+                if directStreamingEnabled {
+                    directStreamingSamples.append(contentsOf: UnsafeBufferPointer(
+                        start: samples, count: sampleCount
+                    ).map { Float($0) / Float(Int16.max) })
+                    emitDirectStreamingChunksIfReady()
+                }
                 for index in Swift.stride(from: 0, to: sampleCount, by: sampleStride) {
                     let sample = Float(samples[index]) / Float(Int16.max)
                     let amplitude = abs(sample)
@@ -792,5 +849,20 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
                     self.liveWaveSamples.count - Self.maxLiveWaveSamples)
             }
         }
+    }
+
+    private func emitDirectStreamingChunksIfReady() {
+        while directStreamingSamples.count >= Self.directStreamingChunkSamples {
+            let chunk = Array(directStreamingSamples.prefix(Self.directStreamingChunkSamples))
+            directStreamingSamples.removeFirst(Self.directStreamingChunkSamples)
+            DispatchQueue.main.async { self.livePCMChunkPublisher.send(chunk) }
+        }
+    }
+
+    private func flushDirectStreamingSamples() {
+        guard !directStreamingSamples.isEmpty else { return }
+        let chunk = directStreamingSamples
+        directStreamingSamples.removeAll(keepingCapacity: true)
+        DispatchQueue.main.async { self.livePCMChunkPublisher.send(chunk) }
     }
 }

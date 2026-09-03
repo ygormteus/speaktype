@@ -7,6 +7,7 @@ struct TranscribeAudioView: View {
     @StateObject private var audioRecorder = AudioRecordingService()
     private var transcription: TranscriptionManager { TranscriptionManager.shared }
     @AppStorage("transcriptionLanguage") private var transcriptionLanguage: String = "auto"
+    @AppStorage(ModelSelection.defaultsKey) private var selectedModel: String = ModelSelection.none
     @State private var transcribedText: String = ""
     @State private var isTranscribing = false
     @State private var showFileImporter = false
@@ -95,7 +96,9 @@ struct TranscribeAudioView: View {
                         }
                     } else {
                         Button(action: {
-                            audioRecorder.startRecording()
+                            Task {
+                                _ = await audioRecorder.startRecording()
+                            }
                         }) {
                             HStack(spacing: 8) {
                                 Image(systemName: "mic.fill")
@@ -243,7 +246,15 @@ struct TranscribeAudioView: View {
                 transcribedText = try await transcription.transcribe(audioFile: url, language: transcriptionLanguage)
                 // Save to History
                 let duration = try await getAudioDuration(url: url)
-                HistoryService.shared.addItem(transcript: transcribedText, duration: duration, audioFileURL: url)
+                let modelName = AIModel.availableModels.first(where: { $0.variant == selectedModel })?.name
+                    ?? selectedModel
+                HistoryService.shared.addItem(
+                    transcript: transcribedText,
+                    duration: duration,
+                    audioFileURL: url,
+                    modelUsed: modelName,
+                    transcriptionTime: transcription.lastTranscriptionDuration
+                )
             } catch {
                 transcribedText = "Error: \(error.localizedDescription)"
             }

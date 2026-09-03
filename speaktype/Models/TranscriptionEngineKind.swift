@@ -12,11 +12,15 @@ enum TranscriptionEngineKind: String, Codable, CaseIterable {
     /// NVIDIA Parakeet models, run on-device via FluidAudio / CoreML.
     case parakeet
 
+    /// NVIDIA Nemotron streaming ASR, used for low-latency multilingual dictation.
+    case nemotron
+
     /// Human-readable label for UI badges.
     var displayName: String {
         switch self {
         case .whisper: return "Whisper"
         case .parakeet: return "Parakeet"
+        case .nemotron: return "Nemotron"
         }
     }
 }

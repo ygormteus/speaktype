@@ -7,6 +7,7 @@ import SwiftUI
 /// model keeps mishearing. Rules run fully offline for every engine.
 struct DictionaryView: View {
     @StateObject private var dictionary = DictionaryService.shared
+    @AppStorage("transcriptionLanguage") private var transcriptionLanguage: String = "auto"
     @State private var editorEntry: DictionaryEntry?
     @State private var isPresentingEditor = false
     @State private var entryPendingDeletion: DictionaryEntry?
@@ -17,6 +18,10 @@ struct DictionaryView: View {
                 header
 
                 explainer
+
+                if transcriptionLanguage == "pt" || transcriptionLanguage == "auto" {
+                    portugueseSuggestions
+                }
 
                 if dictionary.entries.isEmpty {
                     emptyState
@@ -64,6 +69,57 @@ struct DictionaryView: View {
             }
         } message: { entry in
             Text("“\(entry.trimmedTrigger)” will no longer be replaced.")
+        }
+    }
+
+    private var portugueseSuggestions: some View {
+        let suggestions = DictionaryService.portugueseSuggestions.filter { !dictionary.isPresent($0) }
+        return Group {
+            if !suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Portuguese vocabulary suggestions")
+                                .font(Typography.headlineMedium)
+                                .foregroundStyle(Color.textPrimary)
+                            Text("Add only the corrections that make sense for your dictation.")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+                        Spacer()
+                    }
+
+                    ForEach(suggestions) { suggestion in
+                        HStack(spacing: 12) {
+                            Text(suggestion.trigger)
+                                .font(Typography.bodyMedium.weight(.medium))
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.textMuted)
+                            Text(suggestion.replacement)
+                                .font(Typography.bodyMedium)
+                                .foregroundStyle(Color.textSecondary)
+                            Spacer()
+                            Button("Add") {
+                                dictionary.addEntry(
+                                    trigger: suggestion.trigger,
+                                    replacement: suggestion.replacement
+                                )
+                            }
+                            .buttonStyle(.stSecondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.bgHover.opacity(0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                    }
+                }
+                .padding(16)
+                .background(Color.bgCard)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.border.opacity(0.5), lineWidth: 1))
+                .padding(.horizontal, 24)
+            }
         }
     }
 

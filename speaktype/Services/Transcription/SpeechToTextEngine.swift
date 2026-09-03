@@ -1,5 +1,14 @@
 import Foundation
 
+/// How an engine delivers text while audio is captured. The current Parakeet
+/// integration is batch-only; Whisper can already process completed chunks.
+/// Keeping this capability explicit prevents a future streaming UI from
+/// advertising partial results for an unsupported model.
+enum TranscriptionDeliveryMode: String, Equatable {
+    case finalOnly
+    case incremental
+}
+
 /// A speech-to-text backend that can load a model and transcribe audio.
 ///
 /// Both the Whisper (`WhisperService`) and Parakeet engines conform to this so
@@ -10,6 +19,7 @@ import Foundation
 /// All state properties mirror the existing `WhisperService` surface so the
 /// abstraction is a drop-in: nothing about the Whisper code path changes.
 protocol SpeechToTextEngine: AnyObject {
+    var deliveryMode: TranscriptionDeliveryMode { get }
     /// True once a model is loaded and ready to transcribe.
     var isInitialized: Bool { get }
 
@@ -31,4 +41,8 @@ protocol SpeechToTextEngine: AnyObject {
     /// Transcribe an audio file and return the normalized text.
     /// - Parameter language: BCP-47 language code, or `"auto"` to detect.
     func transcribe(audioFile: URL, language: String) async throws -> String
+}
+
+extension SpeechToTextEngine {
+    var deliveryMode: TranscriptionDeliveryMode { .finalOnly }
 }

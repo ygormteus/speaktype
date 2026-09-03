@@ -248,6 +248,10 @@ class ModelDownloadService: ObservableObject {
             }
         }
 
+        for variant in NemotronCatalog.variants where NemotronCatalog.isDownloaded(variant) {
+            foundModels.insert(variant)
+        }
+
         await MainActor.run {
             // Rebuild in one assignment so the UI never flickers through an empty
             // state, and never drop a download that is still running.
@@ -327,9 +331,13 @@ class ModelDownloadService: ObservableObject {
     func downloadModel(variant: String) {
         guard isDownloading[variant] != true else { return }
 
-        // Route Parakeet variants to FluidAudio.
+        // Route FluidAudio model families to their own download APIs.
         if AIModel.engineKind(for: variant) == .parakeet {
             downloadParakeetModel(variant: variant)
+            return
+        }
+        if AIModel.engineKind(for: variant) == .nemotron {
+            downloadNemotronModel(variant: variant)
             return
         }
 
@@ -492,6 +500,44 @@ class ModelDownloadService: ObservableObject {
         activeTasks[variant] = task
     }
 
+    private func downloadNemotronModel(variant: String) {
+        guard let chunkMilliseconds = NemotronCatalog.chunkMilliseconds(for: variant) else {
+            downloadError[variant] = "Unsupported Nemotron model."
+            return
+        }
+        isDownloading[variant] = true
+        downloadProgress[variant] = 0
+        downloadError[variant] = nil
+
+        let task = Task {
+            do {
+                _ = try await StreamingNemotronMultilingualAsrManager.downloadAndPreloadShared(
+                    languageCode: NemotronCatalog.languageCode,
+                    chunkMs: chunkMilliseconds,
+                    progressHandler: { progress in
+                        DispatchQueue.main.async { self.downloadProgress[variant] = progress.fractionCompleted }
+                    }
+                )
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.isDownloading[variant] = false
+                    self.downloadProgress[variant] = 1
+                    self.activeTasks[variant] = nil
+                    self.warmUpAfterDownload(variant: variant)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.isDownloading[variant] = false
+                    self.downloadProgress[variant] = 0
+                    self.downloadError[variant] = Self.userFacingMessage(for: error)
+                    self.activeTasks[variant] = nil
+                }
+            }
+        }
+        activeTasks[variant] = task
+    }
+
     // Aggressively deletes any potential cache for this variant
     func deleteModel(variant: String) async -> String {
         // Parakeet models are managed by FluidAudio in its own cache directory.
@@ -504,6 +550,17 @@ class ModelDownloadService: ObservableObject {
                 self.isDownloading[variant] = false
             }
             return "Deleted Parakeet model cache for \(variant)"
+        }
+        if AIModel.engineKind(for: variant) == .nemotron {
+            if let target = NemotronCatalog.cacheDirectory(for: variant),
+               FileManager.default.fileExists(atPath: target.path) {
+                try? FileManager.default.removeItem(at: target)
+            }
+            await MainActor.run {
+                self.downloadProgress[variant] = 0
+                self.isDownloading[variant] = false
+            }
+            return "Deleted Nemotron model cache for \(variant)"
         }
 
         let fileManager = FileManager.default

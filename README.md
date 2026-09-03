@@ -53,8 +53,12 @@ Press `fn` to start dictating.
 ```bash
 git clone https://github.com/karansinghgit/speaktype.git
 cd speaktype
-make build && make run
+make run-local
 ```
+
+`make run-local` mantém o aplicativo de desenvolvimento em um caminho fixo,
+evitando que o macOS peça as permissões novamente a cada build. Veja o
+[guia de distribuição e testes](docs/DISTRIBUTION.md) para o fluxo assinado.
 
 ---
 

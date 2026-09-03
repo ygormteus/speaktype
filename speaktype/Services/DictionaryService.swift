@@ -32,6 +32,17 @@ struct DictionaryEntry: Identifiable, Codable, Hashable {
     }
 }
 
+/// An optional, reviewable vocabulary correction. Suggestions are never
+/// applied automatically: the user explicitly chooses which terms belong in
+/// their personal dictionary.
+struct DictionarySuggestion: Identifiable, Hashable {
+    let trigger: String
+    let replacement: String
+    let explanation: String
+
+    var id: String { "\(trigger.lowercased())→\(replacement.lowercased())" }
+}
+
 /// Stores the user's dictionary rules and applies them to transcripts.
 ///
 /// Rules are persisted as JSON in `UserDefaults` (mirroring `HistoryService`).
@@ -50,6 +61,28 @@ final class DictionaryService: ObservableObject {
     private init() {
         migrateLegacyRulesIfNeeded()
         loadEntries()
+    }
+
+    /// Useful normalizations for Brazilian Portuguese dictated text. Keeping
+    /// these as suggestions avoids changing a person's transcript without
+    /// consent, while making common capitalization and spelling fixes quick.
+    static let portugueseSuggestions: [DictionarySuggestion] = [
+        .init(trigger: "whatsapp", replacement: "WhatsApp", explanation: "Nome do aplicativo"),
+        .init(trigger: "e mail", replacement: "e-mail", explanation: "Grafia recomendada"),
+        .init(trigger: "chat gpt", replacement: "ChatGPT", explanation: "Nome do produto"),
+        .init(trigger: "open ai", replacement: "OpenAI", explanation: "Nome da empresa"),
+        .init(trigger: "lgpd", replacement: "LGPD", explanation: "Sigla"),
+        .init(trigger: "cpf", replacement: "CPF", explanation: "Sigla"),
+        .init(trigger: "cnpj", replacement: "CNPJ", explanation: "Sigla"),
+    ]
+
+    func isPresent(_ suggestion: DictionarySuggestion) -> Bool {
+        entries.contains {
+            $0.trimmedTrigger.compare(
+                suggestion.trigger,
+                options: [.caseInsensitive, .diacriticInsensitive]
+            ) == .orderedSame
+        }
     }
 
     // MARK: - CRUD

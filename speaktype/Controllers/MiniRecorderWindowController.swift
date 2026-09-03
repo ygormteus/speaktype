@@ -9,6 +9,16 @@ class MiniRecorderWindowController: NSObject {
         UserDefaults.standard.object(forKey: "restoreClipboardAfterAutoPaste") as? Bool ?? true
     }
 
+    private var shouldReviewBeforeAutoPaste: Bool {
+        UserDefaults.standard.bool(forKey: "reviewBeforeAutoPaste")
+    }
+
+    private enum CommitAction {
+        case autoPaste(String)
+        case copyOnly(String)
+        case cancel
+    }
+
     /// When on, the resting pill stays on screen even when idle. Default off:
     /// the recorder appears only while dictating and hides afterward (issue #100).
     private var alwaysShowIdlePill: Bool {
@@ -181,7 +191,7 @@ class MiniRecorderWindowController: NSObject {
         // Fixed window, big enough for the largest phase. The pill morphs purely in
         // SwiftUI, centered inside. A window that never resizes means the animation
         // is smooth with no boundary clipping.
-        let fixedSize = NSSize(width: 520, height: 84)
+        let fixedSize = NSSize(width: 520, height: 112)
         let p = NSPanel(
             contentRect: NSRect(origin: .zero, size: fixedSize),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
@@ -224,13 +234,36 @@ class MiniRecorderWindowController: NSObject {
 
     private func handleCommit(text: String) {
         Task {
+            let action = await MainActor.run {
+                self.reviewAction(for: text)
+            }
+
+            let finalText: String
+            switch action {
+            case .autoPaste(let text):
+                finalText = text
+            case .copyOnly(let text):
+                ClipboardService.shared.copy(text: text)
+                await MainActor.run {
+                    self.returnToIdle()
+                }
+                print("Transcript copied after review; auto-paste skipped by user")
+                return
+            case .cancel:
+                await MainActor.run {
+                    self.returnToIdle()
+                }
+                print("Transcript review cancelled; clipboard was not changed")
+                return
+            }
+
             // 1. Copy to clipboard for manual paste, or snapshot it first if the user wants it restored.
             let previousClipboard: ClipboardService.ClipboardSnapshot?
             if shouldRestoreClipboardAfterAutoPaste {
-                previousClipboard = ClipboardService.shared.copyForTemporaryPaste(text: text)
+                previousClipboard = ClipboardService.shared.copyForTemporaryPaste(text: finalText)
             } else {
                 previousClipboard = nil
-                ClipboardService.shared.copy(text: text)
+                ClipboardService.shared.copy(text: finalText)
             }
 
             // 2. Settle the pill back to its resting state (keep it on screen).
@@ -251,27 +284,77 @@ class MiniRecorderWindowController: NSObject {
             }
 
             // 4. Re-activate the target app
-            if let app = self.lastActiveApp {
-                _ = await MainActor.run {
+            if let app = self.lastActiveApp, !app.isTerminated {
+                let activated = await MainActor.run {
                     app.activate()
                 }
+                print("Auto-paste target \(app.localizedName ?? app.bundleIdentifier ?? "unknown"): \(activated ? "activated" : "activation failed")")
+            } else {
+                print("Auto-paste target unavailable; keeping current frontmost app")
             }
 
             // 5. Wait for focus
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 700_000_000)
 
             // 6. Paste using CGEvent (Accessibility permission only)
-            await MainActor.run {
+            let didPostPaste = await MainActor.run {
                 ClipboardService.shared.paste()
             }
+
+            guard didPostPaste else { return }
 
             guard let previousClipboard else { return }
 
             try? await Task.sleep(nanoseconds: 350_000_000)
 
             await MainActor.run {
-                ClipboardService.shared.restore(previousClipboard, ifCurrentStringMatches: text)
+                ClipboardService.shared.restore(previousClipboard, ifCurrentStringMatches: finalText)
             }
+        }
+    }
+
+    /// Lets the user correct a transcript without slowing down the default
+    /// hotkey flow. The editor is enabled only when the corresponding setting
+    /// is on; otherwise committing remains an immediate copy-and-paste action.
+    private func reviewAction(for text: String) -> CommitAction {
+        guard shouldReviewBeforeAutoPaste else {
+            return .autoPaste(text)
+        }
+
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("Review transcription", comment: "Transcript review dialog title")
+        alert.informativeText = NSLocalizedString(
+            "Edit the text below, then choose how to continue.",
+            comment: "Transcript review dialog instructions"
+        )
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: NSLocalizedString("Paste", comment: "Paste reviewed transcript"))
+        alert.addButton(withTitle: NSLocalizedString("Copy only", comment: "Copy reviewed transcript without pasting"))
+        alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel transcript review"))
+
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 440, height: 150))
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+
+        let textView = NSTextView(frame: scrollView.bounds)
+        textView.string = text
+        textView.isRichText = false
+        textView.usesRuler = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.font = .systemFont(ofSize: 13)
+        scrollView.documentView = textView
+        alert.accessoryView = scrollView
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let editedText = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return editedText.isEmpty ? .cancel : .autoPaste(editedText)
+        case .alertSecondButtonReturn:
+            let editedText = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return editedText.isEmpty ? .cancel : .copyOnly(editedText)
+        default:
+            return .cancel
         }
     }
 

@@ -98,36 +98,34 @@ class ClipboardService {
         print("Restored previous clipboard contents")
     }
 
-    // Paste content (Simulate Cmd+V)
-    func paste() {
-        // Create a concurrent task to avoid blocking main thread if needed,
-        // though CGEvent is fast.
-        DispatchQueue.main.async {
-            let source = CGEventSource(stateID: .hidSystemState)
-
-            // Command key down
-            let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true)
-            cmdDown?.flags = .maskCommand
-
-            // 'V' key down
-            let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-            vDown?.flags = .maskCommand
-
-            // 'V' key up
-            let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-            vUp?.flags = .maskCommand
-
-            // Command key up
-            let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
-
-            // Post events
-            cmdDown?.post(tap: .cghidEventTap)
-            vDown?.post(tap: .cghidEventTap)
-            vUp?.post(tap: .cghidEventTap)
-            cmdUp?.post(tap: .cghidEventTap)
-
-            print("Simulated Cmd+V")
+    /// Posts Cmd+V synchronously after the target application has been
+    /// reactivated. Returning an explicit result makes a paste failure visible
+    /// to the caller instead of silently looking like a transcription issue.
+    @discardableResult
+    func paste() -> Bool {
+        guard isAccessibilityTrusted else {
+            print("Auto-paste skipped: Accessibility permission is not granted")
+            return false
         }
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true),
+              let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
+              let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false),
+              let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
+        else {
+            print("Auto-paste failed: could not create keyboard events")
+            return false
+        }
+
+        cmdDown.flags = .maskCommand
+        vDown.flags = .maskCommand
+        vUp.flags = .maskCommand
+        cmdDown.post(tap: .cghidEventTap)
+        vDown.post(tap: .cghidEventTap)
+        vUp.post(tap: .cghidEventTap)
+        cmdUp.post(tap: .cghidEventTap)
+        print("Auto-paste: Cmd+V posted")
+        return true
     }
 
     // Fallback using AppleScript (more robust for some apps)

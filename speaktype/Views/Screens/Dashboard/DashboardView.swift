@@ -215,7 +215,9 @@ struct DashboardView: View {
                 }
             }
         } else {
-            audioRecorder.startRecording()
+            Task {
+                _ = await audioRecorder.startRecording()
+            }
         }
     }
 
@@ -255,7 +257,7 @@ struct DashboardView: View {
                         duration: duration,
                         audioFileURL: url,
                         modelUsed: modelName,
-                        transcriptionTime: nil
+                        transcriptionTime: transcription.lastTranscriptionDuration
                     )
                     transcriptionStatus = "Done!"
                     isTranscribing = false

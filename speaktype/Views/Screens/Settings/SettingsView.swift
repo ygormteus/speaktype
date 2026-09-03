@@ -50,6 +50,14 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var title: LocalizedStringKey {
+        switch self {
+        case .general: "General"
+        case .audio: "Audio"
+        case .permissions: "Permissions"
+        }
+    }
+
     var icon: String {
         switch self {
         case .general: return "gearshape"
@@ -69,7 +77,7 @@ struct SettingsTabButton: View {
             HStack(spacing: 6) {
                 Image(systemName: tab.icon)
                     .font(.system(size: 13))
-                Text(tab.rawValue)
+                Text(tab.title)
                     .font(Typography.bodyMedium)
             }
             .foregroundStyle(isSelected ? Color.textPrimary : Color.textMuted)
@@ -86,17 +94,29 @@ struct SettingsTabButton: View {
 
 struct GeneralSettingsTab: View {
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
+    @AppStorage(AppLanguage.defaultsKey) private var appLanguage: AppLanguage = .system
     @AppStorage("autoUpdate") private var autoUpdate = true
     @AppStorage("selectedHotkey") private var selectedHotkey: HotkeyOption = .fn
     @AppStorage("recordingMode") private var recordingMode: Int = 0  // 0: Hold to record, 1: Toggle
     @AppStorage("restoreClipboardAfterAutoPaste") private var restoreClipboardAfterAutoPaste =
         true
+    @AppStorage("reviewBeforeAutoPaste") private var reviewBeforeAutoPaste = false
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
     @AppStorage("alwaysShowRecorderPill") private var alwaysShowRecorderPill: Bool = false
     @AppStorage(PillPosition.defaultsKey) private var recorderPillPosition: PillPosition = .defaultPosition
     @AppStorage("transcriptionLanguage") private var transcriptionLanguage: String = "auto"
     @AppStorage("recentTranscriptionLanguages") private var recentLanguagesString: String = ""
     @AppStorage("enableAutoEdit") private var enableAutoEdit: Bool = false
+    @AppStorage(DictationFormattingProfile.defaultsKey)
+    private var dictationFormattingProfile: DictationFormattingProfile = .smart
+    @AppStorage(LocalPunctuationFormatter.spokenPunctuationDefaultsKey)
+    private var spokenPunctuationEnabled: Bool = true
+    @AppStorage(LocalPunctuationFormatter.terminalPunctuationDefaultsKey)
+    private var automaticTerminalPunctuation: Bool = true
+    @AppStorage(OnDevicePunctuationFormatter.defaultsKey)
+    private var onDevicePunctuationEnabled: Bool = true
+    @AppStorage(OnDevicePunctuationFormatter.automaticCommitDefaultsKey)
+    private var onDeviceFormattingBeforeAutoPaste: Bool = false
     @AppStorage(SmartTrailingPunctuation.defaultsKey)
     private var smartTrailingPunctuation: Bool = true
 
@@ -120,6 +140,19 @@ struct GeneralSettingsTab: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                SettingsSection {
+                    SettingsSectionHeader(
+                        icon: "globe", title: "Language",
+                        subtitle: "Choose the language used by SpeakType")
+
+                    Picker("Language", selection: $appLanguage) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.displayName).tag(language)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
                 // Appearance
                 SettingsSection {
                     SettingsSectionHeader(
@@ -236,6 +269,23 @@ struct GeneralSettingsTab: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
+                                Text("Review transcription before auto-paste")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Toggle("", isOn: $reviewBeforeAutoPaste)
+                                    .labelsHidden()
+                            }
+
+                            Text(
+                                "Open a short editor after dictation so you can adjust the text, copy it, or paste it."
+                            )
+                            .font(Typography.captionSmall)
+                            .foregroundStyle(Color.textMuted)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
                                 Text("Always show recorder pill")
                                     .font(Typography.bodyMedium)
                                     .foregroundStyle(Color.textPrimary)
@@ -306,6 +356,89 @@ struct GeneralSettingsTab: View {
                     )
 
                     VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Dictation style")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Picker("Dictation style", selection: $dictationFormattingProfile) {
+                                    ForEach(DictationFormattingProfile.allCases) { profile in
+                                        Text(profile.displayName).tag(profile)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                            }
+
+                            Text(dictationFormattingProfile.detail)
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                            Text("Formatting stays entirely on this Mac. It never sends your transcript to an AI service.")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Spoken punctuation")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Toggle("", isOn: $spokenPunctuationEnabled)
+                                    .labelsHidden()
+                            }
+                            Text("Say “vírgula”, “ponto final”, “ponto de interrogação” or “ponto de exclamação” to insert punctuation exactly where you want it.")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Automatic final punctuation")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Toggle("", isOn: $automaticTerminalPunctuation)
+                                    .labelsHidden()
+                            }
+                            Text("Adds a final period to complete phrases and recognizes common Portuguese question openings.")
+                                .font(Typography.captionSmall)
+                            .foregroundStyle(Color.textMuted)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Context-aware formatting on this Mac")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Toggle("", isOn: $onDevicePunctuationEnabled)
+                                    .labelsHidden()
+                            }
+                            Text("Uses Apple Intelligence only when it is available to improve punctuation, paragraphs and lists for the selected style. Changes are rejected if any word changes. Otherwise, SpeakType uses the local rules above.")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Use Apple Intelligence before auto-paste")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Spacer()
+                                Toggle("", isOn: $onDeviceFormattingBeforeAutoPaste)
+                                    .labelsHidden()
+                            }
+                            Text("Off keeps the hotkey flow instant. Apple Intelligence still runs when you choose to review a transcript; turn this on only if you prefer the extra formatting before every automatic paste.")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+
+                        Divider()
+
                         HStack {
                             Text("Enable Auto Edit")
                                 .font(Typography.bodyMedium)
@@ -316,7 +449,7 @@ struct GeneralSettingsTab: View {
                         }
 
                         Text(
-                            "Auto Edit removes common filler words like \"um\" and \"uh\" after transcription. It stays fully offline and does not rewrite the meaning of what you said."
+                            "Auto Edit removes unambiguous filler words such as \"uh\" and \"hmm\" after transcription. It stays fully offline and does not rewrite the meaning of what you said."
                         )
                         .font(Typography.captionSmall)
                         .foregroundStyle(Color.textMuted)

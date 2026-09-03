@@ -110,4 +110,27 @@ final class HistoryServiceTests: XCTestCase {
         XCTAssertEqual(decoded.first?.wordCount, 3)
         XCTAssertEqual(decoded.first?.duration, 5.0)
     }
+
+    func testModelPerformanceAggregatesOnlyMeasuredTranscriptions() throws {
+        service.addItem(
+            transcript: "First sample",
+            duration: 12,
+            modelUsed: "Parakeet TDT v3",
+            transcriptionTime: 2
+        )
+        service.addItem(
+            transcript: "Second sample",
+            duration: 8,
+            modelUsed: "Parakeet TDT v3",
+            transcriptionTime: 2
+        )
+        service.addItem(transcript: "Unmeasured", duration: 10, modelUsed: "Whisper Tiny")
+
+        let performance = try XCTUnwrap(service.modelPerformance().first)
+
+        XCTAssertEqual(performance.modelName, "Parakeet TDT v3")
+        XCTAssertEqual(performance.sampleCount, 2)
+        XCTAssertEqual(performance.averageTranscriptionTime, 2)
+        XCTAssertEqual(performance.realTimeFactor, 5)
+    }
 }

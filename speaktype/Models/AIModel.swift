@@ -19,6 +19,9 @@ struct AIModel: Identifiable, Equatable {
     /// variant name (e.g. Parakeet). When nil, falls back to the Whisper
     /// `.en` suffix convention.
     var englishOnlyOverride: Bool? = nil
+    /// Some specialized models ship with a deliberately smaller vocabulary.
+    /// Nil means the model accepts every language available to its engine.
+    var supportedLanguagePrefixes: [String]? = nil
 
     var languageSupportLabel: String {
         isEnglishOnly ? "English-only" : "Multilingual"
@@ -26,6 +29,13 @@ struct AIModel: Identifiable, Equatable {
 
     var isEnglishOnly: Bool {
         englishOnlyOverride ?? variant.hasSuffix(".en")
+    }
+
+    func supports(spokenLanguage: String) -> Bool {
+        let language = spokenLanguage.lowercased()
+        if isEnglishOnly { return language.hasPrefix("en") }
+        guard let supportedLanguagePrefixes else { return true }
+        return supportedLanguagePrefixes.contains { language.hasPrefix($0) }
     }
 
     /// Playful-but-accurate qualitative label for the speed score.
@@ -118,11 +128,50 @@ struct AIModel: Identifiable, Equatable {
             expectedSizeBytes: 30_000_000,
             minimumRAMGB: 2
         ),
+        AIModel(
+            name: "Nemotron Multilingual 560 ms",
+            variant: NemotronCatalog.fastVariant,
+            details: "Português • Streaming ao vivo • Menor latência",
+            rating: "Recommended",
+            size: "~650 MB",
+            speed: 9.4,
+            accuracy: 8.8,
+            expectedSizeBytes: 500_000_000,
+            minimumRAMGB: 8,
+            engine: .nemotron,
+            supportedLanguagePrefixes: ["pt"]
+        ),
+        AIModel(
+            name: "Nemotron Multilingual 1120 ms",
+            variant: NemotronCatalog.balancedVariant,
+            details: "Português • Streaming ao vivo • Equilíbrio entre velocidade e contexto",
+            rating: "Excellent",
+            size: "~650 MB",
+            speed: 8.8,
+            accuracy: 9.0,
+            expectedSizeBytes: 500_000_000,
+            minimumRAMGB: 8,
+            engine: .nemotron,
+            supportedLanguagePrefixes: ["pt"]
+        ),
+        AIModel(
+            name: "Nemotron Multilingual 2240 ms",
+            variant: NemotronCatalog.qualityVariant,
+            details: "Português • Streaming ao vivo • Maior contexto e precisão",
+            rating: "Best quality",
+            size: "~650 MB",
+            speed: 7.9,
+            accuracy: 9.2,
+            expectedSizeBytes: 500_000_000,
+            minimumRAMGB: 8,
+            engine: .nemotron,
+            supportedLanguagePrefixes: ["pt"]
+        ),
         // NVIDIA Parakeet (run on-device via FluidAudio / CoreML).
         // Transducer (TDT) models: much faster than Whisper at similar accuracy.
         // Download size is approximate (FluidAudio fetches the int8 weight set).
         AIModel(
-            name: "Parakeet TDT v3",
+            name: "Parakeet TDT v3 0.6B",
             variant: ParakeetCatalog.v3Variant,
             details: "Multilingual (25 languages) • Very fast • NVIDIA Parakeet",
             rating: "Excellent",
@@ -174,8 +223,8 @@ struct AIModel: Identifiable, Equatable {
     }
 
     /// All models for a given engine.
-    static func models(for engine: TranscriptionEngineKind) -> [AIModel] {
-        availableModels.filter { $0.engine == engine }
+    static func models(for engine: TranscriptionEngineKind, spokenLanguage: String = "auto") -> [AIModel] {
+        availableModels.filter { $0.engine == engine && $0.supports(spokenLanguage: spokenLanguage) }
     }
 
     /// What the user primarily wants from transcription — biases the trade-off
@@ -209,10 +258,12 @@ struct AIModel: Identifiable, Equatable {
     /// RAM, chip performance tier, and the Neural Engine — not just RAM.
     static func recommendedModel(
         for capability: DeviceCapability = .current,
-        useCase: UseCase = .dictation
+        useCase: UseCase = .dictation,
+        spokenLanguage: String = "auto"
     ) -> AIModel {
-        let fits = availableModels.filter { capability.ramGB >= $0.minimumRAMGB }
-        let pool = fits.isEmpty ? availableModels : fits
+        let compatible = availableModels.filter { $0.supports(spokenLanguage: spokenLanguage) }
+        let fits = compatible.filter { capability.ramGB >= $0.minimumRAMGB }
+        let pool = fits.isEmpty ? compatible : fits
         return pool.max {
             recommendationScore($0, capability: capability, useCase: useCase)
                 < recommendationScore($1, capability: capability, useCase: useCase)

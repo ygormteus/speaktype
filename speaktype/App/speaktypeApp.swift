@@ -14,6 +14,7 @@ struct speaktypeApp: App {
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
+    @AppStorage(AppLanguage.defaultsKey) private var appLanguage: AppLanguage = .system
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
@@ -50,6 +51,7 @@ struct speaktypeApp: App {
             .environmentObject(trialManager)
             .preferredColorScheme(appTheme.colorScheme)
             .tint(Color.navyInk)
+            .environment(\.locale, appLanguage.locale ?? .current)
         }
         .defaultSize(width: 1200, height: 800)
         .windowStyle(.hiddenTitleBar)
@@ -70,6 +72,7 @@ struct speaktypeApp: App {
                 )
             }
             .preferredColorScheme(appTheme.colorScheme)
+            .environment(\.locale, appLanguage.locale ?? .current)
         }
         .menuBarExtraStyle(.window)
     }

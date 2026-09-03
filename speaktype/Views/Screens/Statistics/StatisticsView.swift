@@ -23,6 +23,7 @@ struct StatisticsView: View {
                 summaryCards
                 barChartSection
                 detailsSection
+                modelPerformanceSection
             }
             .padding(.horizontal, 24)
             .padding(.top, 20)
@@ -245,6 +246,65 @@ struct StatisticsView: View {
         }
     }
 
+    private var modelPerformanceSection: some View {
+        let measurements = historyService.modelPerformance(since: startDate(for: selectedPeriod))
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Model performance on this Mac")
+                        .font(Typography.headlineLarge)
+                        .foregroundStyle(Color.textPrimary)
+                    Text("Measured from completed transcriptions. Faster than real time means the audio was processed in less time than its duration.")
+                        .font(Typography.captionSmall)
+                        .foregroundStyle(Color.textMuted)
+                }
+                Spacer()
+            }
+
+            if measurements.isEmpty {
+                Text("Performance will appear after you transcribe audio with a saved model.")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(measurements) { measurement in
+                    HStack(spacing: 14) {
+                        Image(systemName: "waveform")
+                            .foregroundStyle(Color.accentBlue)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(measurement.modelName)
+                                .font(Typography.labelMedium)
+                                .foregroundStyle(Color.textPrimary)
+                            Text("\(measurement.sampleCount) sample\(measurement.sampleCount == 1 ? "" : "s")")
+                                .font(Typography.captionSmall)
+                                .foregroundStyle(Color.textMuted)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(formatElapsed(measurement.averageTranscriptionTime) ) avg.")
+                                .font(Typography.labelMedium)
+                                .foregroundStyle(Color.textPrimary)
+                            if let realTimeFactor = measurement.realTimeFactor {
+                                Text(String(format: "%.1f× real-time", realTimeFactor))
+                                    .font(Typography.captionSmall)
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 9)
+                    .overlay(alignment: .bottom) {
+                        Divider().overlay(Color.border.opacity(0.45))
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .background(Color.bgCard)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border.opacity(0.5), lineWidth: 1))
+    }
+
     // MARK: - Data Calculations
 
     private func dailyData(for period: StatisticsPeriod) -> [DailyWordCount] {
@@ -265,6 +325,19 @@ struct StatisticsView: View {
             let startDate = calendar.date(byAdding: .day, value: -364, to: now)!
             return generateMonthlyData(from: startDate, to: now)
         }
+    }
+
+    private func startDate(for period: StatisticsPeriod) -> Date {
+        let calendar = Calendar.current
+        switch period {
+        case .week: return calendar.date(byAdding: .day, value: -6, to: Date())!
+        case .month: return calendar.date(byAdding: .day, value: -29, to: Date())!
+        case .year: return calendar.date(byAdding: .day, value: -364, to: Date())!
+        }
+    }
+
+    private func formatElapsed(_ duration: TimeInterval) -> String {
+        duration < 1 ? String(format: "%.0f ms", duration * 1_000) : String(format: "%.2f s", duration)
     }
 
     private func generateDailyData(from startDate: Date, to endDate: Date) -> [DailyWordCount] {

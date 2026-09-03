@@ -3,8 +3,10 @@ import SwiftUI
 /// Screen for choosing the on-device transcription model.
 struct AIModelsView: View {
     @StateObject private var downloadService = ModelDownloadService.shared
+    @StateObject private var historyService = HistoryService.shared
     @AppStorage(ModelSelection.defaultsKey) private var selectedModel: String = ModelSelection.none
     @AppStorage("modelUseCase") private var useCaseRaw: String = AIModel.UseCase.dictation.rawValue
+    @AppStorage("transcriptionLanguage") private var transcriptionLanguage: String = "auto"
 
     /// Keeps the content from stretching edge-to-edge on a wide window, so the
     /// name and its action never sit at opposite ends of a huge empty band.
@@ -15,9 +17,31 @@ struct AIModelsView: View {
     private var transcription: TranscriptionManager { TranscriptionManager.shared }
     private var capability: DeviceCapability { .current }
     private var useCase: AIModel.UseCase { AIModel.UseCase(rawValue: useCaseRaw) ?? .dictation }
-    private var recommendedModel: AIModel { AIModel.recommendedModel(for: capability, useCase: useCase) }
+    private var recommendedModel: AIModel {
+        if useCase == .dictation, let locallyFastestModel { return locallyFastestModel }
+        return AIModel.recommendedModel(
+            for: capability, useCase: useCase, spokenLanguage: transcriptionLanguage)
+    }
     private var selectedModelObject: AIModel? {
         AIModel.availableModels.first { $0.variant == selectedModel }
+    }
+    private var selectedModelIsCompatible: Bool {
+        selectedModelObject?.supports(spokenLanguage: transcriptionLanguage) ?? true
+    }
+
+    /// Prefer observed throughput only after enough completed dictations to
+    /// avoid making a recommendation from one unusually short recording.
+    private var locallyFastestModel: AIModel? {
+        let measurements = historyService.modelPerformance()
+        let candidates = measurements.compactMap { measurement -> (AIModel, Double)? in
+            guard measurement.sampleCount >= 3,
+                  let realTimeFactor = measurement.realTimeFactor,
+                  let model = AIModel.availableModels.first(where: { $0.name == measurement.modelName }),
+                  model.supports(spokenLanguage: transcriptionLanguage)
+            else { return nil }
+            return (model, realTimeFactor)
+        }
+        return candidates.max(by: { $0.1 < $1.1 })?.0
     }
 
     private func isDownloaded(_ variant: String) -> Bool {
@@ -28,10 +52,12 @@ struct AIModelsView: View {
     /// out here because it already headlines the hero (no more duplication).
     private var engineGroups: [(title: String, subtitle: String, models: [AIModel])] {
         [
+            (title: "Nemotron", subtitle: "NVIDIA · live Portuguese dictation",
+             models: AIModel.models(for: .nemotron, spokenLanguage: transcriptionLanguage)),
             (title: "Parakeet", subtitle: "NVIDIA · fastest, near-Whisper accuracy",
-             models: AIModel.models(for: .parakeet)),
+             models: AIModel.models(for: .parakeet, spokenLanguage: transcriptionLanguage)),
             (title: "Whisper", subtitle: "OpenAI · most accurate, a touch slower",
-             models: AIModel.models(for: .whisper)),
+             models: AIModel.models(for: .whisper, spokenLanguage: transcriptionLanguage)),
         ]
         .map { ($0.title, $0.subtitle, $0.models.filter { $0.variant != recommendedModel.variant }) }
         .filter { !$0.2.isEmpty }
@@ -86,7 +112,11 @@ struct AIModelsView: View {
 
             Spacer(minLength: 8)
 
-            if differsFromPick {
+            if !selectedModelIsCompatible {
+                Text("This model only supports English. Choose a multilingual model below.")
+                    .font(Typography.uiMedium(12))
+                    .foregroundStyle(Color.accentError)
+            } else if differsFromPick {
                 Text("A better-matched pick is recommended below")
                     .font(Typography.uiMedium(12))
                     .foregroundStyle(Color.textMuted)

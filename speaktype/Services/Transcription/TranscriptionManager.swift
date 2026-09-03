@@ -1,5 +1,16 @@
 import Foundation
 
+enum TranscriptionManagerError: LocalizedError {
+    case modelDoesNotSupportLanguage(model: String, language: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .modelDoesNotSupportLanguage(model, language):
+            return "\(model) supports English only and cannot transcribe \(language). Choose a multilingual model in AI Models."
+        }
+    }
+}
+
 /// Unified entry point the UI uses for model loading and transcription.
 ///
 /// It routes each call to the correct `SpeechToTextEngine` based on the
@@ -17,6 +28,7 @@ class TranscriptionManager {
 
     private let whisper = WhisperService.shared
     private let parakeet = ParakeetEngine.shared
+    private let nemotron = NemotronStreamingEngine.shared
 
     /// Which backend currently owns the loaded model. Drives display state.
     private(set) var activeKind: TranscriptionEngineKind = .whisper
@@ -30,6 +42,8 @@ class TranscriptionManager {
             return whisper
         case .parakeet:
             return parakeet
+        case .nemotron:
+            return nemotron
         }
     }
 
@@ -42,30 +56,42 @@ class TranscriptionManager {
         switch activeKind {
         case .whisper: return whisper.isInitialized
         case .parakeet: return parakeet.isInitialized
+        case .nemotron: return nemotron.isInitialized
         }
     }
     var isLoading: Bool {
         switch activeKind {
         case .whisper: return whisper.isLoading
         case .parakeet: return parakeet.isLoading
+        case .nemotron: return nemotron.isLoading
         }
     }
     var isTranscribing: Bool {
         switch activeKind {
         case .whisper: return whisper.isTranscribing
         case .parakeet: return parakeet.isTranscribing
+        case .nemotron: return nemotron.isTranscribing
         }
     }
     var loadingStage: String {
         switch activeKind {
         case .whisper: return whisper.loadingStage
         case .parakeet: return parakeet.loadingStage
+        case .nemotron: return nemotron.loadingStage
         }
     }
     var currentModelVariant: String {
         switch activeKind {
         case .whisper: return whisper.currentModelVariant
         case .parakeet: return parakeet.currentModelVariant
+        case .nemotron: return nemotron.currentModelVariant
+        }
+    }
+    var deliveryMode: TranscriptionDeliveryMode {
+        switch activeKind {
+        case .whisper: return whisper.deliveryMode
+        case .parakeet: return parakeet.deliveryMode
+        case .nemotron: return nemotron.deliveryMode
         }
     }
 
@@ -105,6 +131,7 @@ class TranscriptionManager {
     /// actively waiting on: UI that belongs to a dictation must not react to a
     /// preload the user never asked for.
     private(set) var isWarmingUp = false
+    private(set) var lastTranscriptionDuration: TimeInterval?
 
     /// Loads `variant` in the background so the first dictation doesn't pay the
     /// model-load cost — the "warming up" wait users hit mid-sentence.
@@ -150,9 +177,54 @@ class TranscriptionManager {
     /// after snippets have expanded, so a dictation that resolves to an email,
     /// URL, number, or single token loses the model's sentence-final period.
     func transcribe(audioFile: URL, language: String = "auto") async throws -> String {
+        lastTranscriptionDuration = nil
+        if let model = AIModel.availableModels.first(where: { $0.variant == currentModelVariant }),
+           !model.supports(spokenLanguage: language) {
+            throw TranscriptionManagerError.modelDoesNotSupportLanguage(
+                model: model.name,
+                language: language == "auto" ? "automatic language detection" : language
+            )
+        }
+        let startedAt = Date()
         let kind = AIModel.engineKind(for: currentModelVariant)
         let text = try await engine(for: kind).transcribe(audioFile: audioFile, language: language)
-        return SmartTrailingPunctuation.apply(to: DictionaryService.apply(to: text))
+        lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
+        return await finalizeTranscript(text, language: language)
+    }
+
+    func beginLiveTranscription(variant: String, language: String) async throws {
+        guard AIModel.engineKind(for: variant) == .nemotron else { return }
+        if !nemotron.isInitialized || nemotron.currentModelVariant != variant {
+            try await loadModel(variant: variant)
+        }
+        try await nemotron.begin(language: language)
+    }
+
+    func appendLiveChunk(audioFile: URL) async throws {
+        try await nemotron.append(audioFile: audioFile)
+    }
+
+    func appendLivePCM(samples: [Float]) async throws {
+        try await nemotron.append(samples: samples)
+    }
+
+    func finishLiveTranscription() async throws -> String {
+        let text = try await nemotron.finish()
+        lastTranscriptionDuration = nemotron.processingDuration
+        return await finalizeTranscript(text, language: NemotronCatalog.languageCode)
+    }
+
+    var liveTranscript: String { nemotron.partialTranscript }
+
+    private func finalizeTranscript(_ text: String, language: String) async -> String {
+        let dictionaryAdjusted = DictionaryService.apply(to: text)
+        let contextuallyPunctuated = await OnDevicePunctuationFormatter.apply(
+            to: dictionaryAdjusted, language: language)
+        let punctuated = LocalPunctuationFormatter.apply(
+            to: contextuallyPunctuated ?? dictionaryAdjusted, language: language)
+        let normalized = PortugueseTextNormalizer.apply(to: punctuated, language: language)
+        return LocalTranscriptFormatter.apply(
+            to: SmartTrailingPunctuation.apply(to: normalized), language: language)
     }
 }
 
@@ -160,4 +232,6 @@ class TranscriptionManager {
 
 /// `WhisperService` already exposes the full `SpeechToTextEngine` surface, so
 /// conformance requires no changes to the Whisper code path.
-extension WhisperService: SpeechToTextEngine {}
+extension WhisperService: SpeechToTextEngine {
+    var deliveryMode: TranscriptionDeliveryMode { .incremental }
+}

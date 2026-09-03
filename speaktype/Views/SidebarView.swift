@@ -114,7 +114,7 @@ struct SidebarButton: View {
                     .foregroundStyle(isSelected ? Color.textPrimary : Color.textMuted)
                     .frame(width: 20)
 
-                Text(item.rawValue)
+                Text(item.title)
                     .font(isSelected ? Typography.sidebarItemActive : Typography.sidebarItem)
                     .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
 
@@ -185,6 +185,18 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case settings = "Settings"
 
     var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .dashboard: "Dashboard"
+        case .transcribeAudio: "Transcribe Audio"
+        case .history: "History"
+        case .dictionary: "Dictionary"
+        case .statistics: "Statistics"
+        case .aiModels: "AI Models"
+        case .settings: "Settings"
+        }
+    }
 
     var icon: String {
         switch self {

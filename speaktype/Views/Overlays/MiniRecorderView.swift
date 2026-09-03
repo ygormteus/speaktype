@@ -11,6 +11,8 @@ struct MiniRecorderView: View {
     @State private var isProcessing = false
     @State private var statusMessage = "Transcribing..."
     @State private var isWarmingUp = false
+    @State private var isLiveStreaming = false
+    @State private var liveChunkTask: Task<Void, Never>?
     /// When the current warm-up began, so the pill can show elapsed seconds
     /// instead of an open-ended spinner.
     @State private var warmUpStart: Date?
@@ -286,12 +288,13 @@ struct MiniRecorderView: View {
         case .idle: return 58
         case .warming: return 320
         case .processing: return 210
-        case .recording: return expanded ? 460 : 250
+        case .recording: return isLiveStreaming ? 500 : (expanded ? 460 : 250)
         }
     }
 
     private var pillHeight: CGFloat {
-        displayPhase == .idle ? 24 : 44
+        if displayPhase == .idle { return 24 }
+        return isLiveStreaming && isListening ? 72 : 44
     }
 
     private var pillCornerRadius: CGFloat { pillHeight / 2 }
@@ -373,7 +376,45 @@ struct MiniRecorderView: View {
             .transition(.opacity)
     }
 
+    @ViewBuilder
     private var recordingContent: some View {
+        if isLiveStreaming {
+            liveStreamingRecordingContent
+        } else {
+            standardRecordingContent
+        }
+    }
+
+    /// A live transcript is deliberately taller than the normal recording pill.
+    /// `head` truncation keeps the newest words visible instead of freezing the
+    /// preview on the first sentence as the transcript grows.
+    private var liveStreamingRecordingContent: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                recordingDot
+                Text("LIVE PT-BR")
+                    .font(Typography.pillLabel)
+                    .foregroundColor(.white.opacity(0.62))
+                Spacer()
+                TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                    Text(elapsedString(context.date))
+                        .font(Typography.pillTime)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
+
+            Text(transcription.liveTranscript.isEmpty ? "Listening…" : transcription.liveTranscript)
+                .font(Typography.pillLabel)
+                .foregroundColor(.white.opacity(0.92))
+                .lineLimit(2)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .transition(.opacity)
+    }
+
+    private var standardRecordingContent: some View {
         HStack(spacing: 10) {
             recordingDot
 
@@ -416,7 +457,6 @@ struct MiniRecorderView: View {
             .frame(height: 22)
             .frame(maxWidth: .infinity)
 
-            // Elapsed recording time.
             TimelineView(.periodic(from: .now, by: 0.5)) { context in
                 Text(elapsedString(context.date))
                     .font(Typography.pillTime)
@@ -490,6 +530,12 @@ struct MiniRecorderView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .recordingCancelRequested)) { _ in
             cancelRecording()
+        }
+        .onReceive(audioRecorder.chunkPublisher) { url in
+            enqueueLiveChunk(url)
+        }
+        .onReceive(audioRecorder.livePCMChunkPublisher) { samples in
+            enqueueLivePCM(samples)
         }
         .onAppear {
             initializedService()
@@ -702,6 +748,19 @@ struct MiniRecorderView: View {
             return
         }
 
+        if let model = AIModel.availableModels.first(where: { $0.variant == selectedModel }),
+           !model.supports(spokenLanguage: transcriptionLanguage) {
+            debugLog("Selected model does not support \(transcriptionLanguage)")
+            isProcessing = true
+            statusMessage = "Choose a multilingual model"
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                isProcessing = false
+                onCancel?()
+            }
+            return
+        }
+
         Task {
             debugLog("Initializing WhisperService with model: \(selectedModel)")
             do {
@@ -732,8 +791,12 @@ struct MiniRecorderView: View {
 
         Task {
             _ = await audioRecorder.stopRecording(discardOutput: true)
+            audioRecorder.restoreDefaultChunkDuration()
+            audioRecorder.setDirectStreamingEnabled(false)
 
             await MainActor.run {
+                isLiveStreaming = false
+                liveChunkTask = nil
                 isListening = false
                 isProcessing = false
                 statusMessage = "Transcribing..."
@@ -792,11 +855,52 @@ struct MiniRecorderView: View {
             return
         }
 
-        cancelCommit = false
+        Task {
+            let usesLiveStreaming = AIModel.engineKind(for: selectedModel) == .nemotron
+            if usesLiveStreaming {
+                audioRecorder.setDirectStreamingEnabled(true)
+                await MainActor.run { beginWarmUp() }
+                do {
+                    try await transcription.beginLiveTranscription(
+                        variant: selectedModel,
+                        language: transcriptionLanguage
+                    )
+                    await MainActor.run {
+                        endWarmUp()
+                        isLiveStreaming = true
+                    }
+                } catch {
+                    await MainActor.run {
+                        audioRecorder.restoreDefaultChunkDuration()
+                        audioRecorder.setDirectStreamingEnabled(false)
+                        endWarmUp()
+                        isProcessing = true
+                        statusMessage = "Live model could not start"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            self.isProcessing = false
+                            self.onCancel?()
+                        }
+                    }
+                    return
+                }
+            } else {
+                audioRecorder.restoreDefaultChunkDuration()
+                audioRecorder.setDirectStreamingEnabled(false)
+            }
 
-        debugLog("Starting recording...")
-        audioRecorder.startRecording()
-        isListening = true
+            cancelCommit = false
+            debugLog("Starting recording...")
+            let didStart = await audioRecorder.startRecording()
+            guard didStart else {
+                isProcessing = true
+                statusMessage = "Microphone access required"
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                isProcessing = false
+                onCancel?()
+                return
+            }
+            isListening = true
+        }
     }
 
     private func selectAudioDevice(_ deviceId: String) {
@@ -821,11 +925,15 @@ struct MiniRecorderView: View {
 
             guard shouldResumeRecording else { return }
 
-            audioRecorder.startRecording()
+            let didStart = await audioRecorder.startRecording()
 
             await MainActor.run {
                 isProcessing = false
-                isListening = true
+                isListening = didStart
+                if !didStart {
+                    statusMessage = "Microphone access required"
+                    onCancel?()
+                }
             }
         }
     }
@@ -872,9 +980,81 @@ struct MiniRecorderView: View {
                 statusMessage = "Transcribing..."
             }
 
-            // Always use the final full-recording transcription for committed output.
-            // Chunk stitching caused repeated phrases at boundaries across languages.
-            await processRecording(url: url)
+            if isLiveStreaming {
+                await completeLiveRecording(url: url)
+            } else {
+                // Batch engines commit one final full-recording transcription.
+                await processRecording(url: url)
+            }
+        }
+    }
+
+    private func enqueueLiveChunk(_ url: URL) {
+        guard isLiveStreaming else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+
+        let previousTask = liveChunkTask
+        liveChunkTask = Task {
+            _ = await previousTask?.value
+            defer { try? FileManager.default.removeItem(at: url) }
+            do {
+                try await transcription.appendLiveChunk(audioFile: url)
+            } catch {
+                debugLog("Live chunk failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func enqueueLivePCM(_ samples: [Float]) {
+        guard isLiveStreaming else { return }
+        let previousTask = liveChunkTask
+        liveChunkTask = Task {
+            _ = await previousTask?.value
+            do {
+                try await transcription.appendLivePCM(samples: samples)
+            } catch {
+                debugLog("Live PCM failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func completeLiveRecording(url: URL) async {
+        // The recorder flushes its final PCM tail onto the main queue when the
+        // capture writer closes. Yield once so that event can be enqueued before
+        // we await the serial streaming task and call `finish()`.
+        await Task.yield()
+        _ = await liveChunkTask?.value
+        audioRecorder.restoreDefaultChunkDuration()
+        audioRecorder.setDirectStreamingEnabled(false)
+        do {
+            let text = try await transcription.finishLiveTranscription()
+            let duration = await getAudioDuration(url: url)
+            let modelName = AIModel.availableModels.first(where: { $0.variant == selectedModel })?.name
+                ?? selectedModel
+            HistoryService.shared.addItem(
+                transcript: text,
+                duration: duration,
+                audioFileURL: url,
+                modelUsed: modelName,
+                transcriptionTime: transcription.lastTranscriptionDuration
+            )
+            await MainActor.run {
+                if !cancelCommit { onCommit?(text) }
+                isLiveStreaming = false
+                isProcessing = false
+                if cancelCommit { onCancel?() }
+            }
+        } catch {
+            await MainActor.run {
+                isLiveStreaming = false
+                statusMessage = "Live transcription failed"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.isProcessing = false
+                    self.onCancel?()
+                }
+            }
         }
     }
 
@@ -916,7 +1096,11 @@ struct MiniRecorderView: View {
 
                 if let url = url {
                     // Let it process in the background and save to history, but don't commit to UI
-                    await processRecording(url: url)
+                    if isLiveStreaming {
+                        await completeLiveRecording(url: url)
+                    } else {
+                        await processRecording(url: url)
+                    }
                 } else {
                     await MainActor.run {
                         onCancel?()
@@ -1014,7 +1198,7 @@ struct MiniRecorderView: View {
                 duration: duration,
                 audioFileURL: url,
                 modelUsed: modelName,
-                transcriptionTime: nil
+                transcriptionTime: transcription.lastTranscriptionDuration
             )
 
             debugLog("Calling onCommit...")
