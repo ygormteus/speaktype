@@ -57,6 +57,50 @@ final class LocalTranscriptFormatterTests: XCTestCase {
         }
     }
 
+    func testPortugueseHesitationsAreRemoved() {
+        withPreferences(profile: .literal, autoEdit: true) {
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(
+                    to: "ãh, a reunião ahn é hã amanhã hum às éé três eeee horas uhm",
+                    language: "pt-BR"),
+                "a reunião é amanhã às três horas"
+            )
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(to: "então ãhh hmmm vamos", language: "pt-BR"),
+                "então vamos"
+            )
+        }
+    }
+
+    func testPortugueseMeaningfulWordsAreKept() {
+        withPreferences(profile: .literal, autoEdit: true) {
+            for text in [
+                "Ah, entendi", "é um bom dia", "tipo assim, né", "então e depois", "um dois três",
+                "ele é é bom",
+            ] {
+                XCTAssertEqual(LocalTranscriptFormatter.apply(to: text, language: "pt-BR"), text)
+            }
+        }
+    }
+
+    func testPortugueseFillersAreOnlyRemovedForPortuguese() {
+        withPreferences(profile: .literal, autoEdit: true) {
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(to: "hum yes", language: "en"), "hum yes")
+        }
+    }
+
+    func testSmartCapitalizesAfterNewSpokenMarks() {
+        withPreferences(profile: .smart) {
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(
+                    to: "primeira parte.\n\nsegunda parte. \"oi\" disse ele. veja ana@gmail.com.br",
+                    language: "pt-BR"),
+                "Primeira parte.\n\nSegunda parte. \"Oi\" disse ele. Veja ana@gmail.com.br"
+            )
+        }
+    }
+
     private func withPreferences(
         profile: DictationFormattingProfile,
         autoEdit: Bool = false,

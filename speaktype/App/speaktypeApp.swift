@@ -23,6 +23,9 @@ struct speaktypeApp: App {
         // them regardless of what's installed on the machine.
         AppFonts.registerBundledFonts()
 
+        // Must run before any view reads `transcriptionLanguage` via @AppStorage.
+        TranscriptionLanguage.registerDefault()
+
         // For UI testing: bypass onboarding automatically
         if ProcessInfo.processInfo.arguments.contains("--uitesting") {
             hasCompletedOnboarding = true

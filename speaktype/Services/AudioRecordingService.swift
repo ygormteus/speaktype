@@ -13,7 +13,9 @@ class AudioRecordingService: NSObject, ObservableObject {
     private var chunkDuration: TimeInterval = defaultChunkDuration
     private var directStreamingEnabled = false
     private var directStreamingSamples: [Float] = []
-    private static let directStreamingChunkSamples = 8_960  // 560 ms at 16 kHz
+    /// 560 ms at 16 kHz. FluidAudio buffers to the model chunk internally, so
+    /// this only needs to evenly divide every Nemotron chunk (560/1120/2240 ms).
+    static let directStreamingChunkSamples = 8_960
 
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0

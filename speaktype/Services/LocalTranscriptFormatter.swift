@@ -29,7 +29,17 @@ enum LocalTranscriptFormatter {
         // "um" is a Portuguese article/number, so it is intentionally not
         // removed for pt-BR. The small set below is unambiguous across the
         // currently supported dictation languages.
-        let pattern = #"(?i)(^|[\s,.;:!?])(?:uh+|umm+|uhm+|erm+|hmm+)(?=$|[\s,.;:!?])[,.;:!?]?"#
+        //
+        // Portuguese adds only pure hesitation sounds. "ah"/"ai"/"eh" are real
+        // interjections ("Ah, entendi"), "é" is a verb, "e" a conjunction, and
+        // "tipo", "né", "então" carry meaning in context, so none of those are
+        // touched. Elongated forms ("éé", "eee") are never real words.
+        var fillers = ["uh+", "umm+", "uhm+", "erm+", "hmm+"]
+        if language.lowercased().hasPrefix("pt") {
+            fillers += ["ãh+", "ahn+", "hã+", "hum+", "éé+", "eee+"]
+        }
+        let pattern = #"(?i)(^|[\s,.;:!?])(?:"# + fillers.joined(separator: "|")
+            + #")(?=$|[\s,.;:!?])[,.;:!?]?"#
         var result = text.replacingOccurrences(of: pattern, with: "$1", options: .regularExpression)
         result = result.replacingOccurrences(of: #"\s+([,.;:!?])"#, with: "$1", options: .regularExpression)
         result = result.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)

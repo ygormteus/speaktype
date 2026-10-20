@@ -218,10 +218,16 @@ class TranscriptionManager {
 
     private func finalizeTranscript(_ text: String, language: String) async -> String {
         let dictionaryAdjusted = DictionaryService.apply(to: text)
-        let contextuallyPunctuated = await OnDevicePunctuationFormatter.apply(
+        // Numbers are written before any punctuation pass: "três vírgula cinco"
+        // must become "3,5" before the spoken "vírgula" turns into ",", and the
+        // on-device formatter's word-preservation gate then sees digits on
+        // both sides.
+        let numbersWritten = PortugueseNumberFormatter.apply(
             to: dictionaryAdjusted, language: language)
+        let contextuallyPunctuated = await OnDevicePunctuationFormatter.apply(
+            to: numbersWritten, language: language)
         let punctuated = LocalPunctuationFormatter.apply(
-            to: contextuallyPunctuated ?? dictionaryAdjusted, language: language)
+            to: contextuallyPunctuated ?? numbersWritten, language: language)
         let normalized = PortugueseTextNormalizer.apply(to: punctuated, language: language)
         let formatted = LocalTranscriptFormatter.apply(
             to: SmartTrailingPunctuation.apply(to: normalized), language: language)

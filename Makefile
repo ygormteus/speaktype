@@ -1,6 +1,6 @@
 # Makefile for SpeakType
 
-.PHONY: help build build-local clean clean-dev test lint format ci run run-local run-dev run-release setup logs logs-live logs-errors logs-export install uninstall reinstall
+.PHONY: bench-ptbr help build build-local clean clean-dev test lint format ci run run-local run-dev run-release setup logs logs-live logs-errors logs-export install uninstall reinstall
 
 # Default target
 help:
@@ -23,6 +23,7 @@ help:
 	@echo "  make test          - Run all tests"
 	@echo "  make test-unit     - Run unit tests only"
 	@echo "  make test-ui       - Run UI tests only"
+	@echo "  make bench-ptbr DIR=<clips> - PT-BR accuracy/latency benchmark"
 	@echo ""
 	@echo "Distribution:"
 	@echo "  make create-release - 🔨 Bump version, build, sign, notarize → dist/*.dmg"
@@ -109,6 +110,11 @@ test:
 test-unit:
 	@echo "Running unit tests..."
 	xcodebuild test -scheme speaktype -destination 'platform=macOS' -only-testing:speaktypeTests
+
+# PT-BR WER + latency benchmark (see docs/BENCHMARK.md)
+# Usage: make bench-ptbr DIR=~/bench-ptbr [MODELS=variant1,variant2]
+bench-ptbr:
+	@./scripts/benchmark-ptbr.sh "$(DIR)" $(MODELS)
 
 # Run UI tests only
 test-ui:

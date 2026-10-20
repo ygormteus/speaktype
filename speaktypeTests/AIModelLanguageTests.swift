@@ -43,4 +43,22 @@ final class AIModelLanguageTests: XCTestCase {
             $0.trigger == "whatsapp" && $0.replacement == "WhatsApp"
         })
     }
+
+    func testCompressedTurboIsMultilingualAndLighter() {
+        let compact = try! XCTUnwrap(
+            AIModel.availableModels.first(where: {
+                $0.variant == "openai_whisper-large-v3-v20240930_turbo_632MB"
+            })
+        )
+        let full = try! XCTUnwrap(
+            AIModel.availableModels.first(where: { $0.variant == "openai_whisper-large-v3_turbo" })
+        )
+
+        XCTAssertEqual(compact.engine, .whisper)
+        XCTAssertTrue(compact.supports(spokenLanguage: "pt"))
+        XCTAssertTrue(compact.supports(spokenLanguage: "auto"))
+        XCTAssertLessThan(compact.minimumRAMGB, full.minimumRAMGB)
+        XCTAssertGreaterThan(compact.speed, full.speed)
+        XCTAssertTrue(AIModel.models(for: .whisper, spokenLanguage: "pt").contains(compact))
+    }
 }
