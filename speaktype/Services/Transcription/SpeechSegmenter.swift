@@ -47,8 +47,10 @@ nonisolated enum SpeechEnergy {
 ///   30 s window.
 ///
 /// The noise floor tracks the quietest recent buffers: it drops immediately
-/// and rises slowly (time constant `noiseFloorRiseTime`), so a burst of
-/// speech barely moves it. Combined with the capped threshold in
+/// and rises slowly (time constant `noiseFloorRiseTime`), and only on
+/// buffers classified as silence. Voiced buffers never raise it, so even
+/// long, steady, quiet speech can't pull the threshold up to its own level
+/// and get cut mid-phrase. Combined with the capped threshold in
 /// `SpeechEnergy`, speech is never mistaken for silence.
 nonisolated struct SpeechSegmenter {
     struct Configuration: Equatable {
@@ -57,9 +59,11 @@ nonisolated struct SpeechSegmenter {
         var relaxedPauseAfter: TimeInterval = 15.0
         var relaxedPauseDuration: TimeInterval = 0.15
         var maximumChunkDuration: TimeInterval = 25.0
-        /// A chunk with less voiced audio than this is tagged as silent and
-        /// is not sent to Whisper, which tends to hallucinate on silence.
-        var minimumSpeechDuration: TimeInterval = 0.3
+        /// A chunk (other than the last) with less voiced audio than this is
+        /// tagged as silent and is not sent to Whisper, which tends to
+        /// hallucinate on silence. Matches `AudioTrimmer.minimumSpeechDuration`:
+        /// a short word like "Ok." is ~0.25 s and must still be decoded.
+        var minimumSpeechDuration: TimeInterval = 0.1
         var noiseFloorRiseTime: TimeInterval = 10.0
     }
 
@@ -67,6 +71,9 @@ nonisolated struct SpeechSegmenter {
     struct ChunkStats: Equatable {
         var duration: TimeInterval = 0
         var speechDuration: TimeInterval = 0
+        /// True when the chunk was cut at `maximumChunkDuration` rather than
+        /// at a pause, so a word may straddle the cut.
+        var endedByForcedCut = false
     }
 
     let configuration: Configuration
@@ -80,9 +87,13 @@ nonisolated struct SpeechSegmenter {
 
     var silenceThreshold: Float { SpeechEnergy.silenceThreshold(noiseFloor: noiseFloor) }
 
-    /// True when the chunk so far contains enough voiced audio to transcribe.
-    func hasSpeech(_ stats: ChunkStats) -> Bool {
-        stats.speechDuration >= configuration.minimumSpeechDuration
+    /// True when the chunk contains enough voiced audio to transcribe. The
+    /// final chunk is decoded whenever it has any voiced audio: skipping it
+    /// would silently drop the user's last word from the pasted text.
+    func hasSpeech(_ stats: ChunkStats, isFinalChunk: Bool = false) -> Bool {
+        isFinalChunk
+            ? stats.speechDuration > 0
+            : stats.speechDuration >= configuration.minimumSpeechDuration
     }
 
     /// Feeds one capture buffer. Returns the finished chunk's stats when the
@@ -93,7 +104,7 @@ nonisolated struct SpeechSegmenter {
         // Classify against the floor *before* this buffer updates it, so a
         // first loud buffer is not its own reference.
         let isSilent = rms < silenceThreshold
-        updateNoiseFloor(rms: rms, duration: duration)
+        updateNoiseFloor(rms: rms, duration: duration, isSilent: isSilent)
 
         current.duration += duration
         if isSilent {
@@ -104,7 +115,8 @@ nonisolated struct SpeechSegmenter {
         }
 
         guard shouldCut() else { return nil }
-        let finished = current
+        var finished = current
+        finished.endedByForcedCut = current.duration >= configuration.maximumChunkDuration
         current = ChunkStats()
         trailingSilence = 0
         return finished
@@ -131,14 +143,14 @@ nonisolated struct SpeechSegmenter {
         return trailingSilence >= requiredPause
     }
 
-    private mutating func updateNoiseFloor(rms: Float, duration: TimeInterval) {
+    private mutating func updateNoiseFloor(rms: Float, duration: TimeInterval, isSilent: Bool) {
         guard let floor = noiseFloor else {
             noiseFloor = rms
             return
         }
         if rms < floor {
             noiseFloor = rms
-        } else {
+        } else if isSilent {
             let alpha = Float(min(1, duration / configuration.noiseFloorRiseTime))
             noiseFloor = floor + (rms - floor) * alpha
         }

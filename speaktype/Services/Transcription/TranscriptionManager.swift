@@ -250,7 +250,9 @@ class TranscriptionManager {
     ) async -> String? {
         lastTranscriptionDuration = nil
         let startedAt = Date()
-        switch await session.finish(summary: summary) {
+        // `stopRecording` delivers every chunk before returning, so a chunk
+        // that is missing now never arrives: fall back without waiting.
+        switch await session.finish(summary: summary, arrivalTimeout: 0) {
         case .transcript(let raw):
             let text = await finalizeTranscript(raw, language: language)
             lastTranscriptionDuration = Date().timeIntervalSince(startedAt)

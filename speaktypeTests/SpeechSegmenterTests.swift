@@ -112,6 +112,81 @@ final class SpeechSegmenterTests: XCTestCase {
         XCTAssertEqual(feed(&fresh, rms: noise, seconds: 0.5, elapsed: &t2).count, 1)
     }
 
+    /// "Vou mandar o relatório amanhã." … pause … "Ok." then release: the
+    /// short final word must still be decoded.
+    func testShortFinalUtteranceAfterPauseCountsAsSpeech() {
+        var segmenter = SpeechSegmenter()
+        var t: TimeInterval = 0
+        feed(&segmenter, rms: speech, seconds: 4.5, elapsed: &t)
+        XCTAssertEqual(feed(&segmenter, rms: silence, seconds: 1, elapsed: &t).count, 1)
+        feed(&segmenter, rms: speech, seconds: 0.25, elapsed: &t)
+        feed(&segmenter, rms: silence, seconds: 0.2, elapsed: &t)
+        let stats = segmenter.finishChunk()
+        XCTAssertTrue(segmenter.hasSpeech(stats))
+        XCTAssertTrue(segmenter.hasSpeech(stats, isFinalChunk: true))
+    }
+
+    func testFinalChunkIsDecodedUnlessItHasNoVoicedAudio() {
+        var segmenter = SpeechSegmenter()
+        var t: TimeInterval = 0
+        feed(&segmenter, rms: silence, seconds: 1, elapsed: &t)
+        feed(&segmenter, rms: speech, seconds: 0.064, elapsed: &t)  // a very short "é"
+        let stats = segmenter.finishChunk()
+        XCTAssertFalse(segmenter.hasSpeech(stats), "a click this short is skipped mid-recording")
+        XCTAssertTrue(segmenter.hasSpeech(stats, isFinalChunk: true))
+
+        feed(&segmenter, rms: silence, seconds: 1, elapsed: &t)
+        XCTAssertFalse(segmenter.hasSpeech(segmenter.finishChunk(), isFinalChunk: true))
+    }
+
+    func testForcedCutIsTaggedButPauseCutIsNot() {
+        var segmenter = SpeechSegmenter()
+        var t: TimeInterval = 0
+        feed(&segmenter, rms: speech, seconds: 5, elapsed: &t)
+        let pauseCuts = feed(&segmenter, rms: silence, seconds: 1, elapsed: &t)
+        XCTAssertEqual(pauseCuts.count, 1)
+        XCTAssertFalse(pauseCuts[0].stats.endedByForcedCut)
+
+        let forcedCuts = feed(&segmenter, rms: speech, seconds: 26, elapsed: &t)
+        XCTAssertEqual(forcedCuts.count, 1)
+        XCTAssertTrue(forcedCuts[0].stats.endedByForcedCut)
+        XCTAssertFalse(segmenter.finishChunk().endedByForcedCut)
+    }
+
+    /// Quiet but steady speech (≈ -38 dBFS over a ≈ -54 dBFS room) must not
+    /// drag the noise floor up until the speech itself reads as silence.
+    func testSteadyQuietSpeechIsNotCutBeforeMaximumDuration() {
+        var segmenter = SpeechSegmenter()
+        var t: TimeInterval = 0
+        let floor: Float = 0.002       // ≈ -54 dBFS
+        let quietSpeech: Float = 0.0126  // ≈ -38 dBFS
+        feed(&segmenter, rms: floor, seconds: 1, elapsed: &t)
+        let cuts = feed(&segmenter, rms: quietSpeech, seconds: 30, elapsed: &t)
+        XCTAssertEqual(cuts.count, 1)
+        XCTAssertTrue(cuts.first?.stats.endedByForcedCut ?? false)
+        XCTAssertEqual(cuts.first?.stats.duration ?? 0, 25, accuracy: 0.05)
+        XCTAssertLessThan(segmenter.silenceThreshold, quietSpeech)
+    }
+
+    func testPausesBetweenQuietPhrasesStillCut() {
+        var segmenter = SpeechSegmenter()
+        var t: TimeInterval = 0
+        let floor: Float = 0.002
+        let quietSpeech: Float = 0.0126
+        feed(&segmenter, rms: floor, seconds: 1, elapsed: &t)
+        var cuts = feed(&segmenter, rms: quietSpeech, seconds: 6, elapsed: &t)
+        cuts += feed(&segmenter, rms: floor, seconds: 0.5, elapsed: &t)
+        XCTAssertEqual(cuts.count, 1)
+        XCTAssertEqual(cuts.first?.at ?? 0, 7.35, accuracy: 0.05)
+        XCTAssertFalse(cuts.first?.stats.endedByForcedCut ?? true)
+
+        // A pause after a long quiet stretch is still a pause.
+        cuts = feed(&segmenter, rms: quietSpeech, seconds: 12, elapsed: &t)
+        cuts += feed(&segmenter, rms: floor, seconds: 0.5, elapsed: &t)
+        XCTAssertEqual(cuts.count, 1)
+        XCTAssertEqual(cuts.first?.stats.speechDuration ?? 0, 12, accuracy: 0.05)
+    }
+
     func testFixedIntervalConfigurationCutsOnDurationOnly() {
         var configuration = SpeechSegmenter.Configuration()
         configuration.minimumChunkDuration = 4

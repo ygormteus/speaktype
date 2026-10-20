@@ -52,14 +52,17 @@ final class IncrementalTranscriptionSessionTests: XCTestCase {
     }
 
     private func chunk(
-        _ index: Int, _ text: String, hasSpeech: Bool = true, duration: TimeInterval = 5
+        _ index: Int, _ text: String, hasSpeech: Bool = true, duration: TimeInterval = 5,
+        endedByForcedCut: Bool = false
     ) throws -> RecordedAudioChunk {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("session-test-\(UUID().uuidString).wav")
         try Data([0]).write(to: url)
         engine.texts[url] = text
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return RecordedAudioChunk(url: url, index: index, duration: duration, hasSpeech: hasSpeech)
+        return RecordedAudioChunk(
+            url: url, index: index, duration: duration, hasSpeech: hasSpeech,
+            endedByForcedCut: endedByForcedCut)
     }
 
     private func exists(_ chunk: RecordedAudioChunk) -> Bool {
@@ -69,7 +72,8 @@ final class IncrementalTranscriptionSessionTests: XCTestCase {
     func testDecodesEachChunkAsItArrivesWhenEngineKeepsUp() async throws {
         let session = makeSession()
         let chunks = [
-            try chunk(0, "Olá, hoje vamos testar o ditado"),
+            // A forced max-length cut split "o ditado"; both sides heard it.
+            try chunk(0, "Olá, hoje vamos testar o ditado", endedByForcedCut: true),
             try chunk(1, "o ditado em português."),
             try chunk(2, "Você pode me enviar o relatório?"),
         ]
@@ -165,7 +169,8 @@ final class IncrementalTranscriptionSessionTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 100_000_000)
             session.append(last)
         }
-        let outcome = await session.finish(summary: RecordedChunkSummary(chunkCount: 2, hasGaps: false))
+        let outcome = await session.finish(
+            summary: RecordedChunkSummary(chunkCount: 2, hasGaps: false), arrivalTimeout: 2)
         XCTAssertEqual(outcome, .transcript("primeiro último"))
     }
 
@@ -192,6 +197,53 @@ final class IncrementalTranscriptionSessionTests: XCTestCase {
         let outcome = await session.finish(
             summary: RecordedChunkSummary(chunkCount: 3, hasGaps: false), arrivalTimeout: 0.05)
         XCTAssertEqual(outcome, .needsFullTranscription(reason: "missing chunks [1]"))
+    }
+
+    /// The recorder delivers every chunk before `stopRecording` returns, so
+    /// by default a missing chunk is final and must not delay the fallback.
+    func testMissingChunkFallsBackWithoutWaitingByDefault() async throws {
+        let session = makeSession()
+        session.append(try chunk(0, "um"))
+        let start = Date()
+        let outcome = await session.finish(summary: RecordedChunkSummary(chunkCount: 2, hasGaps: false))
+        XCTAssertEqual(outcome, .needsFullTranscription(reason: "missing chunks [1]"))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testSpeechChunkThatDecodesEmptyFallsBack() async throws {
+        let session = makeSession()
+        session.append(try chunk(0, "Vou mandar o relatório amanhã."))
+        await settle()
+        session.append(try chunk(1, "", duration: 0.5))
+        let outcome = await session.finish(summary: RecordedChunkSummary(chunkCount: 2, hasGaps: false))
+        guard case .needsFullTranscription = outcome else {
+            return XCTFail("expected fallback, got \(outcome)")
+        }
+    }
+
+    /// Pause-cut chunks don't overlap, so a word repeated across the pause
+    /// was really said twice.
+    func testKeepsWordRepeatedAcrossPauseCut() async throws {
+        let session = makeSession()
+        session.append(try chunk(0, "Eu acho que sim."))
+        await settle()  // decoded separately, so the texts meet at a seam
+        session.append(try chunk(1, "Sim, com certeza."))
+        let outcome = await session.finish(summary: RecordedChunkSummary(chunkCount: 2, hasGaps: false))
+        XCTAssertEqual(outcome, .transcript("Eu acho que sim. Sim, com certeza."))
+    }
+
+    func testDeduplicatesOnlyAcrossForcedCut() async throws {
+        let session = makeSession()
+        for chunk in [
+            try chunk(0, "vamos testar o ditado", endedByForcedCut: true),
+            try chunk(1, "o ditado em português."),
+            try chunk(2, "Português é fácil."),
+        ] {
+            session.append(chunk)
+            await settle()
+        }
+        let outcome = await session.finish(summary: RecordedChunkSummary(chunkCount: 3, hasGaps: false))
+        XCTAssertEqual(outcome, .transcript("vamos testar o ditado em português. Português é fácil."))
     }
 
     func testGapsOrMissingSummaryFallBack() {

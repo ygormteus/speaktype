@@ -11,6 +11,9 @@ nonisolated struct RecordedAudioChunk: Equatable {
     let duration: TimeInterval
     /// False when the segmenter heard (almost) no speech in this chunk.
     let hasSpeech: Bool
+    /// True when the chunk was cut at the maximum length instead of at a
+    /// pause, so the next chunk may start mid-word.
+    let endedByForcedCut: Bool
 }
 
 /// How the last recording was split into chunks. `chunkCount` counts every
@@ -504,7 +507,8 @@ class AudioRecordingService: NSObject, ObservableObject {
                                 label: "Final chunk"
                             ) {
                                 print("🔪 Final chunk saved: \(validChunkURL.lastPathComponent)")
-                                finalChunk = self.makeChunk(url: validChunkURL, index: index, stats: stats)
+                                finalChunk = self.makeChunk(
+                                    url: validChunkURL, index: index, stats: stats, isFinal: true)
                             } else {
                                 try? FileManager.default.removeItem(at: lastChunkURL)
                             }
@@ -581,12 +585,13 @@ class AudioRecordingService: NSObject, ObservableObject {
         let chunkSummary: RecordedChunkSummary
     }
 
-    private func makeChunk(url: URL, index: Int, stats: SpeechSegmenter.ChunkStats)
-        -> RecordedAudioChunk
-    {
+    private func makeChunk(
+        url: URL, index: Int, stats: SpeechSegmenter.ChunkStats, isFinal: Bool = false
+    ) -> RecordedAudioChunk {
         RecordedAudioChunk(
             url: url, index: index, duration: stats.duration,
-            hasSpeech: segmenter.hasSpeech(stats))
+            hasSpeech: segmenter.hasSpeech(stats, isFinalChunk: isFinal),
+            endedByForcedCut: stats.endedByForcedCut)
     }
 
     private func hasMicrophoneAccess() async -> Bool {
