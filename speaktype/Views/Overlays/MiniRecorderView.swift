@@ -13,6 +13,9 @@ struct MiniRecorderView: View {
     @State private var isWarmingUp = false
     @State private var isLiveStreaming = false
     @State private var liveChunkTask: Task<Void, Never>?
+    /// Whisper chunk-by-chunk transcription for the current recording, if the
+    /// model was loaded when recording started.
+    @State private var incrementalSession: IncrementalTranscriptionSession?
     /// When the current warm-up began, so the pill can show elapsed seconds
     /// instead of an open-ended spinner.
     @State private var warmUpStart: Date?
@@ -531,8 +534,12 @@ struct MiniRecorderView: View {
         .onReceive(NotificationCenter.default.publisher(for: .recordingCancelRequested)) { _ in
             cancelRecording()
         }
-        .onReceive(audioRecorder.chunkPublisher) { url in
-            enqueueLiveChunk(url)
+        .onReceive(audioRecorder.chunkPublisher) { chunk in
+            if let incrementalSession {
+                incrementalSession.append(chunk)
+            } else {
+                enqueueLiveChunk(chunk.url)
+            }
         }
         .onReceive(audioRecorder.livePCMChunkPublisher) { samples in
             enqueueLivePCM(samples)
@@ -793,6 +800,7 @@ struct MiniRecorderView: View {
             _ = await audioRecorder.stopRecording(discardOutput: true)
             audioRecorder.restoreDefaultChunkDuration()
             audioRecorder.setDirectStreamingEnabled(false)
+            await cancelIncrementalSession()
 
             await MainActor.run {
                 isLiveStreaming = false
@@ -886,12 +894,15 @@ struct MiniRecorderView: View {
             } else {
                 audioRecorder.restoreDefaultChunkDuration()
                 audioRecorder.setDirectStreamingEnabled(false)
+                startIncrementalSessionIfPossible()
             }
 
             cancelCommit = false
             debugLog("Starting recording...")
             let didStart = await audioRecorder.startRecording()
             guard didStart else {
+                await cancelIncrementalSession()
+                audioRecorder.restoreDefaultChunkDuration()
                 isProcessing = true
                 statusMessage = "Microphone access required"
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -917,6 +928,9 @@ struct MiniRecorderView: View {
                 }
 
                 _ = await audioRecorder.stopRecording(discardOutput: true)
+                // The discarded audio's chunks are gone; start a fresh session
+                // whose chunk indices match the resumed recording.
+                await cancelIncrementalSession()
             }
 
             await MainActor.run {
@@ -925,7 +939,9 @@ struct MiniRecorderView: View {
 
             guard shouldResumeRecording else { return }
 
+            startIncrementalSessionIfPossible()
             let didStart = await audioRecorder.startRecording()
+            if !didStart { await cancelIncrementalSession() }
 
             await MainActor.run {
                 isProcessing = false
@@ -967,6 +983,8 @@ struct MiniRecorderView: View {
 
             guard let url = url else {
                 debugLog("No recording URL, cancelling")
+                await cancelIncrementalSession()
+                audioRecorder.restoreDefaultChunkDuration()
                 await MainActor.run {
                     isListening = false
                     onCancel?()
@@ -983,10 +1001,54 @@ struct MiniRecorderView: View {
             if isLiveStreaming {
                 await completeLiveRecording(url: url)
             } else {
-                // Batch engines commit one final full-recording transcription.
-                await processRecording(url: url)
+                await completeBatchRecording(url: url)
             }
         }
+    }
+
+    /// Whisper only: transcribe chunks while recording so the post-release
+    /// wait covers just the final chunk. Requires the model to be loaded
+    /// already (warm-up); otherwise the full-file path loads it after release.
+    private func startIncrementalSessionIfPossible() {
+        guard AIModel.engineKind(for: selectedModel) == .whisper,
+              let session = transcription.makeIncrementalSession(
+                variant: selectedModel, language: transcriptionLanguage)
+        else {
+            incrementalSession = nil
+            return
+        }
+        audioRecorder.setSpeechSegmentedChunking(true)
+        incrementalSession = session
+        debugLog("Incremental Whisper session started")
+    }
+
+    private func cancelIncrementalSession() async {
+        guard let session = incrementalSession else { return }
+        incrementalSession = nil
+        await session.cancel()
+    }
+
+    /// Batch engines: use the incremental Whisper transcript when it covers
+    /// the whole recording, otherwise one full-recording transcription.
+    private func completeBatchRecording(url: URL) async {
+        audioRecorder.restoreDefaultChunkDuration()
+        guard let session = incrementalSession else {
+            await processRecording(url: url)
+            return
+        }
+        incrementalSession = nil
+
+        if !cancelCommit {
+            await MainActor.run { statusMessage = "Transcribing..." }
+        }
+        guard let text = await transcription.finishIncrementalTranscription(
+            session, summary: audioRecorder.lastChunkSummary, language: transcriptionLanguage)
+        else {
+            await processRecording(url: url)
+            return
+        }
+        debugLog("Incremental transcription result: \(text.prefix(50))...")
+        await commitTranscription(text, url: url)
     }
 
     private func enqueueLiveChunk(_ url: URL) {
@@ -1021,10 +1083,8 @@ struct MiniRecorderView: View {
     }
 
     private func completeLiveRecording(url: URL) async {
-        // The recorder flushes its final PCM tail onto the main queue when the
-        // capture writer closes. Yield once so that event can be enqueued before
-        // we await the serial streaming task and call `finish()`.
-        await Task.yield()
+        // `stopRecording` delivers the final PCM tail synchronously before it
+        // returns, so `liveChunkTask` already includes it here.
         _ = await liveChunkTask?.value
         audioRecorder.restoreDefaultChunkDuration()
         audioRecorder.setDirectStreamingEnabled(false)
@@ -1099,9 +1159,11 @@ struct MiniRecorderView: View {
                     if isLiveStreaming {
                         await completeLiveRecording(url: url)
                     } else {
-                        await processRecording(url: url)
+                        await completeBatchRecording(url: url)
                     }
                 } else {
+                    await cancelIncrementalSession()
+                    audioRecorder.restoreDefaultChunkDuration()
                     await MainActor.run {
                         onCancel?()
                     }
@@ -1176,45 +1238,7 @@ struct MiniRecorderView: View {
             }
             let text = try await transcription.transcribe(audioFile: url, language: transcriptionLanguage)
             debugLog("Transcription result: \(text.prefix(50))...")
-
-            guard !text.isEmpty else {
-                debugLog("Empty text, cancelling")
-                await MainActor.run {
-                    statusMessage = "No speech detected"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        self.isProcessing = false
-                        self.onCancel?()
-                    }
-                }
-                return
-            }
-
-            let duration = await getAudioDuration(url: url)
-            let modelName =
-                AIModel.availableModels.first(where: { $0.variant == selectedModel })?.name
-                ?? selectedModel
-            HistoryService.shared.addItem(
-                transcript: text,
-                duration: duration,
-                audioFileURL: url,
-                modelUsed: modelName,
-                transcriptionTime: transcription.lastTranscriptionDuration
-            )
-
-            debugLog("Calling onCommit...")
-            await MainActor.run {
-                if !cancelCommit {
-                    onCommit?(text)
-                }
-                isProcessing = false
-
-                // If we cancelled by dismissing early, the window might already be closed,
-                // but if we waited for it (e.g. short transcription), close it now.
-                if cancelCommit {
-                    onCancel?()
-                }
-            }
-            debugLog("onCommit called successfully")
+            await commitTranscription(text, url: url)
         } catch {
             debugLog("Error: \(error.localizedDescription)")
             await MainActor.run {
@@ -1225,6 +1249,49 @@ struct MiniRecorderView: View {
                 }
             }
         }
+    }
+
+    /// Saves a finished batch transcript to History and commits it (unless
+    /// Escape was pressed), or shows "No speech detected" when empty.
+    private func commitTranscription(_ text: String, url: URL) async {
+        guard !text.isEmpty else {
+            debugLog("Empty text, cancelling")
+            await MainActor.run {
+                statusMessage = "No speech detected"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    self.isProcessing = false
+                    self.onCancel?()
+                }
+            }
+            return
+        }
+
+        let duration = await getAudioDuration(url: url)
+        let modelName =
+            AIModel.availableModels.first(where: { $0.variant == selectedModel })?.name
+            ?? selectedModel
+        HistoryService.shared.addItem(
+            transcript: text,
+            duration: duration,
+            audioFileURL: url,
+            modelUsed: modelName,
+            transcriptionTime: transcription.lastTranscriptionDuration
+        )
+
+        debugLog("Calling onCommit...")
+        await MainActor.run {
+            if !cancelCommit {
+                onCommit?(text)
+            }
+            isProcessing = false
+
+            // If we cancelled by dismissing early, the window might already be closed,
+            // but if we waited for it (e.g. short transcription), close it now.
+            if cancelCommit {
+                onCancel?()
+            }
+        }
+        debugLog("onCommit called successfully")
     }
 
     private func getAudioDuration(url: URL) async -> TimeInterval {

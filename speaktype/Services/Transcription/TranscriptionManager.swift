@@ -2,11 +2,14 @@ import Foundation
 
 enum TranscriptionManagerError: LocalizedError {
     case modelDoesNotSupportLanguage(model: String, language: String)
+    case modelChanged
 
     var errorDescription: String? {
         switch self {
         case let .modelDoesNotSupportLanguage(model, language):
             return "\(model) supports English only and cannot transcribe \(language). Choose a multilingual model in AI Models."
+        case .modelChanged:
+            return "The transcription model changed during the recording."
         }
     }
 }
@@ -187,9 +190,75 @@ class TranscriptionManager {
         }
         let startedAt = Date()
         let kind = AIModel.engineKind(for: currentModelVariant)
-        let text = try await engine(for: kind).transcribe(audioFile: audioFile, language: language)
+
+        // Batch engines only: trim dead air around the dictation into a temp
+        // copy (the original stays untouched for History). A file with no
+        // speech at all returns empty without running the model.
+        var input = audioFile
+        var trimmedCopy: URL?
+        if kind != .nemotron {
+            switch await Task.detached(operation: { AudioTrimmer.trimSilence(in: audioFile) }).value {
+            case .silent:
+                print("🔇 No speech detected in \(audioFile.lastPathComponent); skipping model")
+                lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
+                return ""
+            case .trimmed(let url):
+                input = url
+                trimmedCopy = url
+            case .unchanged:
+                break
+            }
+        }
+        defer { if let trimmedCopy { try? FileManager.default.removeItem(at: trimmedCopy) } }
+
+        let text = try await engine(for: kind).transcribe(audioFile: input, language: language)
         lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
         return await finalizeTranscript(text, language: language)
+    }
+
+    // MARK: - Incremental (chunked) Whisper
+
+    /// Starts a chunk-by-chunk session for `variant` if it's a Whisper model
+    /// that is already loaded. Returns nil otherwise; the caller then uses the
+    /// regular full-file path after recording.
+    func makeIncrementalSession(variant: String, language: String) -> IncrementalTranscriptionSession? {
+        guard AIModel.engineKind(for: variant) == .whisper,
+              whisper.isInitialized, whisper.currentModelVariant == variant
+        else { return nil }
+        if let model = AIModel.availableModels.first(where: { $0.variant == variant }),
+           !model.supports(spokenLanguage: language) {
+            return nil
+        }
+        let whisper = self.whisper
+        return IncrementalTranscriptionSession { url in
+            // A model switch mid-recording would mix two models' output (or
+            // decode with none); fail the chunk so the session falls back.
+            guard whisper.isInitialized, whisper.currentModelVariant == variant else {
+                throw TranscriptionManagerError.modelChanged
+            }
+            return try await whisper.transcribeChunk(audioFile: url, language: language)
+        }
+    }
+
+    /// Finishes `session` and returns the finalized transcript, or nil when
+    /// the chunks don't cover the recording and the caller must transcribe
+    /// the full file. `lastTranscriptionDuration` is the post-release wait.
+    func finishIncrementalTranscription(
+        _ session: IncrementalTranscriptionSession,
+        summary: RecordedChunkSummary?,
+        language: String
+    ) async -> String? {
+        lastTranscriptionDuration = nil
+        let startedAt = Date()
+        switch await session.finish(summary: summary) {
+        case .transcript(let raw):
+            let text = await finalizeTranscript(raw, language: language)
+            lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
+            return text
+        case .needsFullTranscription(let reason):
+            print("⚠️ Incremental transcription unusable (\(reason)); transcribing full recording")
+            return nil
+        }
     }
 
     func beginLiveTranscription(variant: String, language: String) async throws {
