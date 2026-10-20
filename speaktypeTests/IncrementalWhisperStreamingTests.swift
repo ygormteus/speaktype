@@ -132,15 +132,16 @@ final class IncrementalWhisperStreamingTests: XCTestCase {
         var elapsedAudio: TimeInterval = 0
         let replayStart = Date()
 
-        func emitChunk(stats: SpeechSegmenter.ChunkStats) throws {
+        func emitChunk(stats: SpeechSegmenter.ChunkStats, isFinal: Bool = false) throws {
+            let hasSpeech = segmenter.hasSpeech(stats, isFinalChunk: isFinal)
             let url = try writeWAV(pending, name: "chunk\(chunkIndex)")
             boundaries.append(String(
                 format: "    chunk %d: ends at %.2f s, %.2f s long, speech %.2f s%@",
                 chunkIndex, elapsedAudio, stats.duration, stats.speechDuration,
-                segmenter.hasSpeech(stats) ? "" : " (no speech: not decoded)"))
+                hasSpeech ? "" : " (no speech: not decoded)"))
             session.append(RecordedAudioChunk(
                 url: url, index: chunkIndex, duration: stats.duration,
-                hasSpeech: segmenter.hasSpeech(stats)))
+                hasSpeech: hasSpeech, endedByForcedCut: stats.endedByForcedCut))
             chunkIndex += 1
             pending.removeAll(keepingCapacity: true)
         }
@@ -161,7 +162,7 @@ final class IncrementalWhisperStreamingTests: XCTestCase {
 
         // "Release": close the final chunk and finish.
         let releaseStart = Date()
-        try emitChunk(stats: segmenter.finishChunk())
+        try emitChunk(stats: segmenter.finishChunk(), isFinal: true)
         let incrementalText = await manager.finishIncrementalTranscription(
             session, summary: RecordedChunkSummary(chunkCount: chunkIndex, hasGaps: false),
             language: "pt")

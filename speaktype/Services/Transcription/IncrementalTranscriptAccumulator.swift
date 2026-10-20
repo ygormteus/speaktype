@@ -4,8 +4,8 @@ import Foundation
 /// model dependency: engines remain responsible for producing a chunk, and
 /// the UI can safely render the returned snapshot.
 ///
-/// Each new chunk is stitched onto the previous one with `TranscriptSeam`, so
-/// a word Whisper heard on both sides of a cut is only kept once.
+/// It doesn't know where the audio was cut, so it never strips words at the
+/// seams: a word repeated across a pause was really said twice.
 actor IncrementalTranscriptAccumulator {
     private var chunks: [String] = []
 
@@ -13,11 +13,8 @@ actor IncrementalTranscriptAccumulator {
     func append(_ chunk: String) -> String {
         let normalized = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return transcript }
-        let stitched = chunks.last.map {
-            TranscriptSeam.removingBoundaryRepeat(previous: $0, next: normalized)
-        } ?? normalized
-        guard !stitched.isEmpty else { return transcript }
-        chunks.append(stitched)
+        guard chunks.last != normalized else { return transcript }
+        chunks.append(normalized)
         return transcript
     }
 
@@ -58,14 +55,18 @@ nonisolated enum TranscriptSeam {
         return nextWords.joined(separator: " ")
     }
 
-    /// Joins chunk texts in order, stripping boundary repeats.
-    static func join(_ chunks: [String]) -> String {
+    /// Joins chunk texts in order. Boundary repeats are stripped only where
+    /// chunk `i - 1` is in `deduplicatingAfter`, i.e. it ended at a forced
+    /// cut that may have split a word. Chunks cut at a pause don't overlap,
+    /// so a repeat there ("…que sim." / "Sim, com certeza.") is real speech.
+    static func join(_ chunks: [String], deduplicatingAfter: Set<Int> = []) -> String {
         var joined: [String] = []
-        for chunk in chunks {
+        for (index, chunk) in chunks.enumerated() {
             let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            let stitched = joined.last.map { removingBoundaryRepeat(previous: $0, next: trimmed) }
-                ?? trimmed
+            let stitched = deduplicatingAfter.contains(index - 1)
+                ? joined.last.map { removingBoundaryRepeat(previous: $0, next: trimmed) } ?? trimmed
+                : trimmed
             if !stitched.isEmpty { joined.append(stitched) }
         }
         return joined.joined(separator: " ")

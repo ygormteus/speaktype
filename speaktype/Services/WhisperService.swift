@@ -284,9 +284,10 @@ class WhisperService {
             throw TranscriptionError.notInitialized
         }
 
+        // A missing chunk must fail rather than read as "no speech", or the
+        // incremental session would paste a transcript with a hole in it.
         guard FileManager.default.fileExists(atPath: audioFile.path) else {
-            // Chunk file may have been cleaned up already - return empty gracefully
-            return ""
+            throw TranscriptionError.fileNotFound
         }
 
         print("🔪 Chunk transcription started: \(audioFile.lastPathComponent)")

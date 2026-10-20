@@ -16,6 +16,11 @@ struct MiniRecorderView: View {
     /// Whisper chunk-by-chunk transcription for the current recording, if the
     /// model was loaded when recording started.
     @State private var incrementalSession: IncrementalTranscriptionSession?
+    /// True from a stop request until its transcription finishes. `isListening`
+    /// only drops once `stopRecording` returns, so without this a double tap
+    /// of the hotkey issued a second stop that got a nil URL and cancelled
+    /// the incremental session the first stop still needed.
+    @State private var isStopping = false
     /// When the current warm-up began, so the pill can show elapsed seconds
     /// instead of an open-ended spinner.
     @State private var warmUpStart: Date?
@@ -800,7 +805,9 @@ struct MiniRecorderView: View {
             _ = await audioRecorder.stopRecording(discardOutput: true)
             audioRecorder.restoreDefaultChunkDuration()
             audioRecorder.setDirectStreamingEnabled(false)
-            await cancelIncrementalSession()
+            // A stop in progress owns the session; it finishes in the
+            // background (`cancelCommit` keeps its text out of the target app).
+            if !isStopping { await cancelIncrementalSession() }
 
             await MainActor.run {
                 isLiveStreaming = false
@@ -957,6 +964,11 @@ struct MiniRecorderView: View {
     private func stopAndTranscribe() {
         debugLog("stopAndTranscribe called")
 
+        guard !isStopping else {
+            debugLog("Stop already in progress, ignoring duplicate stop request")
+            return
+        }
+
         guard isListening || audioRecorder.isRecording else {
             debugLog("Not listening, ignoring duplicate stop request")
             return
@@ -977,11 +989,14 @@ struct MiniRecorderView: View {
             return
         }
 
+        isStopping = true
         Task {
+            defer { isStopping = false }
             let url = await audioRecorder.stopRecording()
             debugLog("stopRecording returned: \(url?.absoluteString ?? "nil")")
 
             guard let url = url else {
+                // `isStopping` makes this the only stop, so the session is ours.
                 debugLog("No recording URL, cancelling")
                 await cancelIncrementalSession()
                 audioRecorder.restoreDefaultChunkDuration()
@@ -1144,8 +1159,12 @@ struct MiniRecorderView: View {
         debugLog("Escape pressed - cancelling immediate commit")
         cancelCommit = true
 
-        if isListening {
+        // A second stop while one is in progress would get no URL and cancel
+        // that stop's session; let it finish (uncommitted) and just dismiss.
+        if isListening && !isStopping {
+            isStopping = true
             Task {
+                defer { isStopping = false }
                 let url = await audioRecorder.stopRecording()
 
                 await MainActor.run {

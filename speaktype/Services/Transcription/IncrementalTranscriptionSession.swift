@@ -14,7 +14,13 @@ import Foundation
 /// Raw engine text is kept by chunk index. `finish` joins it with
 /// `TranscriptSeam` only if every chunk of the recording arrived and
 /// succeeded; otherwise it reports that the caller must transcribe the full
-/// recording instead, so a failed chunk can never silently drop words.
+/// recording instead, so a failed chunk can never silently drop words. A
+/// chunk with speech that decodes to nothing counts as failed for the same
+/// reason.
+///
+/// Chunks don't overlap, so words repeated across a pause cut were really
+/// said twice and are kept. Only seams after a forced max-length cut, where
+/// a word may straddle the cut and be heard on both sides, are de-duplicated.
 ///
 /// Every chunk file handed to `append` is deleted once processed, skipped, or
 /// cancelled.
@@ -38,6 +44,8 @@ final class IncrementalTranscriptionSession {
     private var pending: [RecordedAudioChunk] = []
     private var worker: Task<Void, Never>?
     private var texts: [Int: String] = [:]
+    /// Decoded chunks that ended at a forced cut (see `TranscriptSeam.join`).
+    private var forcedCutIndices = Set<Int>()
     private var receivedIndices = Set<Int>()
     private var failure: String?
     private var isAccepting = true
@@ -76,8 +84,10 @@ final class IncrementalTranscriptionSession {
     ///   - summary: The recorder's chunk summary; nil means chunking state is
     ///     unknown, which always falls back.
     ///   - arrivalTimeout: How long to wait for chunks the recorder reported
-    ///     but that haven't been delivered yet.
-    func finish(summary: RecordedChunkSummary?, arrivalTimeout: TimeInterval = 2) async -> Outcome {
+    ///     but that haven't been delivered yet. The recorder delivers every
+    ///     chunk before `stopRecording` returns, so by default nothing is
+    ///     awaited and a missing chunk falls back immediately.
+    func finish(summary: RecordedChunkSummary?, arrivalTimeout: TimeInterval = 0) async -> Outcome {
         guard !isCancelled else { return .needsFullTranscription(reason: "session cancelled") }
 
         if let summary, summary.isUsable {
@@ -90,7 +100,8 @@ final class IncrementalTranscriptionSession {
         await worker?.value
 
         let outcome = Self.outcome(
-            texts: texts, receivedIndices: receivedIndices, failure: failure, summary: summary)
+            texts: texts, receivedIndices: receivedIndices, failure: failure, summary: summary,
+            forcedCutIndices: forcedCutIndices)
         texts.removeAll()
         return outcome
     }
@@ -144,30 +155,43 @@ final class IncrementalTranscriptionSession {
         for chunk in batch { texts[chunk.index] = "" }
         let speech = batch.filter(\.hasSpeech)
         guard let first = speech.first else { return }
+        forcedCutIndices.formUnion(speech.filter(\.endedByForcedCut).map(\.index))
 
         do {
             if speech.count == 1 {
-                decodeCount += 1
-                texts[first.index] = try await transcriber(first.url)
+                texts[first.index] = try await transcribe(first.url)
                 return
             }
             if let merged = try? merger(speech.map(\.url)) {
                 defer { try? FileManager.default.removeItem(at: merged) }
-                decodeCount += 1
-                texts[first.index] = try await transcriber(merged)
+                texts[first.index] = try await transcribe(merged)
                 return
             }
             // Merging failed: decode each chunk on its own.
             for chunk in speech {
                 guard !isCancelled else { return }
-                decodeCount += 1
-                texts[chunk.index] = try await transcriber(chunk.url)
+                texts[chunk.index] = try await transcribe(chunk.url)
             }
         } catch {
             if !isCancelled {
                 failure = "chunks \(batch.map(\.index)) failed: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Decodes audio the segmenter heard speech in. Empty text there means
+    /// words were lost (or the file was), so it fails the chunk.
+    private func transcribe(_ url: URL) async throws -> String {
+        decodeCount += 1
+        let text = try await transcriber(url)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw EmptyDecodeError()
+        }
+        return text
+    }
+
+    private struct EmptyDecodeError: LocalizedError {
+        var errorDescription: String? { "speech decoded to empty text" }
     }
 
     private func discardPending() {
@@ -181,7 +205,8 @@ final class IncrementalTranscriptionSession {
         texts: [Int: String],
         receivedIndices: Set<Int>,
         failure: String?,
-        summary: RecordedChunkSummary?
+        summary: RecordedChunkSummary?,
+        forcedCutIndices: Set<Int> = []
     ) -> Outcome {
         guard let summary else { return .needsFullTranscription(reason: "no chunk summary") }
         guard !summary.hasGaps else {
@@ -199,7 +224,8 @@ final class IncrementalTranscriptionSession {
             return .needsFullTranscription(reason: "chunk not transcribed")
         }
 
-        let joined = TranscriptSeam.join((0..<summary.chunkCount).map { texts[$0] ?? "" })
+        let joined = TranscriptSeam.join(
+            (0..<summary.chunkCount).map { texts[$0] ?? "" }, deduplicatingAfter: forcedCutIndices)
         // Empty incremental text is cheap to double-check: the full path trims
         // silence first and returns empty immediately when there is no speech.
         guard !joined.isEmpty else { return .needsFullTranscription(reason: "empty transcript") }

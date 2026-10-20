@@ -54,18 +54,32 @@ final class TranscriptSeamTests: XCTestCase {
         XCTAssertEqual(TranscriptSeam.removingBoundaryRepeat(previous: "mundo", next: "mundo"), "")
     }
 
-    func testJoinStitchesChunksInOrderAndSkipsEmpty() {
+    func testJoinKeepsRepeatsAtPauseSeamsAndSkipsEmpty() {
         XCTAssertEqual(
-            TranscriptSeam.join(["Olá, hoje vamos testar", "", "testar o ditado.", "  Você pode?"]),
-            "Olá, hoje vamos testar o ditado. Você pode?")
+            TranscriptSeam.join(["Eu acho que sim.", "", "Sim, com certeza.", "  Você pode?"]),
+            "Eu acho que sim. Sim, com certeza. Você pode?")
         XCTAssertEqual(TranscriptSeam.join([]), "")
         XCTAssertEqual(TranscriptSeam.join(["", " "]), "")
     }
 
-    func testAccumulatorUsesSeamDeduplication() async {
+    func testJoinDeduplicatesOnlyAfterForcedCuts() {
+        // Chunk 0 ended at a forced cut; chunk 2 follows a pause.
+        XCTAssertEqual(
+            TranscriptSeam.join(
+                ["Olá, hoje vamos testar", "testar o ditado.", "Ditado é bom."],
+                deduplicatingAfter: [0]),
+            "Olá, hoje vamos testar o ditado. Ditado é bom.")
+        // A forced cut whose next chunk is silent: the following text comes
+        // after a pause, so it is kept as is.
+        XCTAssertEqual(
+            TranscriptSeam.join(["vamos testar", "", "testar de novo"], deduplicatingAfter: [0]),
+            "vamos testar testar de novo")
+    }
+
+    func testAccumulatorKeepsRepeatedWordsAcrossChunks() async {
         let accumulator = IncrementalTranscriptAccumulator()
-        await accumulator.append("vamos testar o ditado")
-        let text = await accumulator.append("o ditado em português")
-        XCTAssertEqual(text, "vamos testar o ditado em português")
+        await accumulator.append("Eu acho que sim.")
+        let text = await accumulator.append("Sim, com certeza.")
+        XCTAssertEqual(text, "Eu acho que sim. Sim, com certeza.")
     }
 }
