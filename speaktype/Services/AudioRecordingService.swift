@@ -352,6 +352,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         resetChunkWriterState()
         directStreamingSamples.removeAll(keepingCapacity: true)
         lastChunkSummary = nil
+        AudioPlayerService.shared.stop()
         isRecording = true
         recordingStartTime = Date()
         // Hop onto audioQueue: idleSessionStopWorkItem and the chunking state

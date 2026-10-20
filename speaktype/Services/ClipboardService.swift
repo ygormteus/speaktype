@@ -8,6 +8,14 @@ class ClipboardService {
         fileprivate let items: [ClipboardItemSnapshot]
     }
 
+    enum AutoPastePreparation {
+        case ready(ClipboardSnapshot?)
+        case requiresAccessibility
+    }
+
+    private let accessibilityCheck: () -> Bool
+    private let eventPoster: (CGEvent, CGEventTapLocation) -> Void
+
     fileprivate struct ClipboardItemSnapshot {
         let dataByType: [NSPasteboard.PasteboardType: Data]
     }
@@ -17,7 +25,25 @@ class ClipboardService {
         return LicenseManager.shared
     }
 
-    private init() {}
+    init(accessibilityCheck: @escaping () -> Bool = { AXIsProcessTrusted() },
+         eventPoster: @escaping (CGEvent, CGEventTapLocation) -> Void = { event, location in event.post(tap: location) }) {
+        self.accessibilityCheck = accessibilityCheck
+        self.eventPoster = eventPoster
+    }
+
+    func prepareAutoPaste(text: String, restoreClipboard: Bool) -> AutoPastePreparation {
+        guard isAccessibilityTrusted else {
+            copy(text: text)
+            return .requiresAccessibility
+        }
+
+        if restoreClipboard {
+            return .ready(copyForTemporaryPaste(text: text))
+        }
+
+        copy(text: text)
+        return .ready(nil)
+    }
 
     // Copy text to system clipboard with optional promotional wrapper
     func copy(text: String) {
@@ -29,7 +55,7 @@ class ClipboardService {
 
         // Verify write
         if let check = pasteboard.string(forType: .string), check == finalText {
-            print("✅ Clipboard Write Verified: '\(check.prefix(20))...'")
+            print("✅ Clipboard Write Verified")
         } else {
             print("❌ Clipboard Write FAILED!")
         }
@@ -107,7 +133,7 @@ class ClipboardService {
             print("Auto-paste skipped: Accessibility permission is not granted")
             return false
         }
-        guard let source = CGEventSource(stateID: .hidSystemState),
+        guard let source = CGEventSource(stateID: .combinedSessionState),
               let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true),
               let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
               let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false),
@@ -120,10 +146,11 @@ class ClipboardService {
         cmdDown.flags = .maskCommand
         vDown.flags = .maskCommand
         vUp.flags = .maskCommand
-        cmdDown.post(tap: .cghidEventTap)
-        vDown.post(tap: .cghidEventTap)
-        vUp.post(tap: .cghidEventTap)
-        cmdUp.post(tap: .cghidEventTap)
+        cmdUp.flags = []
+        eventPoster(cmdDown, .cgSessionEventTap)
+        eventPoster(vDown, .cgSessionEventTap)
+        eventPoster(vUp, .cgSessionEventTap)
+        eventPoster(cmdUp, .cgSessionEventTap)
         print("Auto-paste: Cmd+V posted")
         return true
     }
@@ -144,7 +171,7 @@ class ClipboardService {
 
     // Check if we have permission to send keystrokes
     var isAccessibilityTrusted: Bool {
-        return AXIsProcessTrusted()
+        return accessibilityCheck()
     }
 
     // Request permission via system prompt

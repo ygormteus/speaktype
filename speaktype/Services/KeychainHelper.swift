@@ -108,5 +108,39 @@ class KeychainHelper {
             return false
         }
     }
+
+    func saveMeetingAPIKey(_ key: String) throws {
+        let query = meetingKeyQuery
+        let data = Data(key.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
+        let update = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
+        if update == errSecItemNotFound {
+            var insert = query
+            insert[kSecValueData] = data
+            insert[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let status = SecItemAdd(insert as CFDictionary, nil)
+            guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
+        } else if update != errSecSuccess { throw KeychainError.unexpectedStatus(update) }
+    }
+
+    func readMeetingAPIKey() throws -> String {
+        var query = meetingKeyQuery
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data, let key = String(data: data, encoding: .utf8) else {
+            throw KeychainError.itemNotFound
+        }
+        return key
+    }
+
+    func deleteMeetingAPIKey() throws {
+        let status = SecItemDelete(meetingKeyQuery as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unexpectedStatus(status) }
+    }
+
+    private var meetingKeyQuery: [CFString: Any] {
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: "speaktype.meeting.openai", kSecAttrAccount: "summary_api_key"]
+    }
 }
 

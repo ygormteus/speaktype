@@ -12,8 +12,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var lastHandledHotkeyTimestamp: TimeInterval = 0
     private var lastHandledHotkeyPressedState = false
-    private var globalKeyDownMonitor: Any?
+    private var globalKeyDownMonitor: UUID?
     private var localKeyDownMonitor: Any?
+    private var fnDoubleTapGesture = FnDoubleTapGesture()
+    private var pendingFnStop: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         miniRecorderController = MiniRecorderWindowController()
@@ -58,6 +60,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup dynamic hotkey monitoring based on user selection
         setupHotkeyMonitoring()
+
+        for name in [Notification.Name.recordingHotkeyResetRequested,
+                     .recordingStopRequested, .recordingCancelRequested] {
+            NotificationCenter.default.publisher(for: name)
+                .sink { [weak self] _ in self?.resetFnDoubleTap() }
+                .store(in: &cancellables)
+        }
+
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .map { [weak self] _ in self?.hotkeyGesturePreference }
+            .prepend(hotkeyGesturePreference)
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let wasActive = self.fnDoubleTapGesture.isActive
+                self.resetFnDoubleTap()
+                if wasActive { self.miniRecorderController?.stopRecording() }
+            }
+            .store(in: &cancellables)
 
         // This fork is distributed as an unsigned local beta. It must never
         // query or install releases published by the original project.
@@ -209,7 +232,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return event
         }
 
-        globalKeyDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) {
+        globalKeyDownMonitor = GlobalKeyDownMonitor.shared.addHandler {
             [weak self] event in
             self?.handleModifierComboEvent(event)
         }
@@ -299,6 +322,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isDuplicateHotkeyEvent(isPressed: isPressed) else { return }
 
         let currentHotkey = getSelectedHotkey()
+        if currentHotkey == .fn,
+            UserDefaults.standard.integer(forKey: "recordingMode") == 0,
+            UserDefaults.standard.bool(forKey: "fnDoubleTapEnabled")
+        {
+            guard isPressed != isHotkeyPressed else { return }
+            isHotkeyPressed = isPressed
+            if isPressed && !Self.isFrontmostAppTerminal() && Self.globeKeyShowsEmojiPicker() {
+                suppressEmojiPicker()
+            }
+            let action = fnDoubleTapGesture.handle(
+                isPressed: isPressed, at: ProcessInfo.processInfo.systemUptime)
+            handleFnDoubleTapAction(action)
+            return
+        }
         if isPressed && !isHotkeyPressed {
             isHotkeyPressed = true
 
@@ -333,6 +370,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleModifierComboEvent(_ event: NSEvent) {
+        if event.keyCode == 53 { resetFnDoubleTap() }
         guard isHotkeyPressed else { return }
         guard UserDefaults.standard.integer(forKey: "recordingMode") == 0 else { return }
         guard !event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty else { return }
@@ -342,7 +380,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard event.keyCode != Self.emojiSuppressionKeyCode else { return }
 
         isHotkeyPressed = false
+        resetFnDoubleTap()
         miniRecorderController?.cancelRecording()
+    }
+
+    private var hotkeyGesturePreference: String? {
+        let defaults = UserDefaults.standard
+        return "\(getSelectedHotkey().rawValue):\(defaults.integer(forKey: "recordingMode")):\(defaults.bool(forKey: "fnDoubleTapEnabled"))"
+    }
+
+    private func resetFnDoubleTap() {
+        pendingFnStop?.cancel()
+        pendingFnStop = nil
+        fnDoubleTapGesture.reset()
+    }
+
+    private func handleFnDoubleTapAction(_ action: FnDoubleTapGesture.Action) {
+        pendingFnStop?.cancel()
+        pendingFnStop = nil
+        switch action {
+        case .start:
+            miniRecorderController?.startRecording()
+        case .stop:
+            miniRecorderController?.stopRecording()
+        case .deferStop:
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingFnStop = nil
+                if self.fnDoubleTapGesture.finishPendingTap() == .stop {
+                    self.miniRecorderController?.stopRecording()
+                }
+            }
+            pendingFnStop = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + FnDoubleTapGesture.doubleTapInterval, execute: work)
+        case .none, .latch:
+            break
+        }
     }
 
     private func isDuplicateHotkeyEvent(isPressed: Bool) -> Bool {

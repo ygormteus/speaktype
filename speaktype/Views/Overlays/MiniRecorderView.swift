@@ -7,6 +7,7 @@ struct MiniRecorderView: View {
     @ObservedObject private var audioRecorder = AudioRecordingService.shared
     private var transcription: TranscriptionManager { TranscriptionManager.shared }
     @State private var isListening = false
+    @State private var isStartingRecording = false
 
     @State private var isProcessing = false
     @State private var statusMessage = "Transcribing..."
@@ -26,14 +27,11 @@ struct MiniRecorderView: View {
     @State private var warmUpStart: Date?
     @State private var warmUpElapsed: TimeInterval = 0
     @State private var warmUpTimer: Timer?
-    @State private var showAccessibilityWarning = false
     var onCommit: ((String) -> Void)?
     var onCancel: (() -> Void)?
 
     @AppStorage(ModelSelection.defaultsKey) private var selectedModel: String = ModelSelection.none
     @AppStorage("recordingMode") private var recordingMode: Int = 0
-    /// Whether we've already shown the one-time accessibility warning (release only).
-    @AppStorage("hasShownAccessibilityWarning") private var hasShownAccessibilityWarning = false
     @AppStorage("transcriptionLanguage") private var transcriptionLanguage: String = "auto"
     @AppStorage("recentTranscriptionLanguages") private var recentLanguagesString: String = ""
     private let quickLanguageDefaults = ["en", "es", "fr", "de", "hi", "pt", "ja", "zh"]
@@ -98,13 +96,9 @@ struct MiniRecorderView: View {
         "Input device: \(currentInputDeviceName). Change microphones without going back to Settings."
     }
 
-    private var isAccessibilityEnabled: Bool {
-        AXIsProcessTrusted()
-    }
-
     // MARK: - State for Escape key cancellation
     @State private var cancelCommit = false
-    @State private var globalEscapeMonitor: Any?
+    @State private var globalEscapeMonitor: UUID?
     @State private var localEscapeMonitor: Any?
 
     @Environment(\.colorScheme) private var colorScheme
@@ -554,25 +548,31 @@ struct MiniRecorderView: View {
             audioRecorder.fetchAvailableDevices()
 
             // Set up Escape key monitors
-            globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-                if event.keyCode == 53 {
-                    Task { @MainActor in self.handleEscape() }
+            if globalEscapeMonitor == nil {
+                globalEscapeMonitor = GlobalKeyDownMonitor.shared.addHandler { event in
+                    if event.keyCode == 53 {
+                        Task { @MainActor in self.handleEscape() }
+                    }
                 }
             }
-            localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.keyCode == 53 {
-                    Task { @MainActor in self.handleEscape() }
-                    return nil  // swallow Escape
+            if localEscapeMonitor == nil {
+                localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    if event.keyCode == 53 {
+                        Task { @MainActor in self.handleEscape() }
+                        return nil
+                    }
+                    return event
                 }
-                return event
             }
         }
         .onDisappear {
             if let globalEscapeMonitor = globalEscapeMonitor {
-                NSEvent.removeMonitor(globalEscapeMonitor)
+                GlobalKeyDownMonitor.shared.removeHandler(globalEscapeMonitor)
+                self.globalEscapeMonitor = nil
             }
             if let localEscapeMonitor = localEscapeMonitor {
                 NSEvent.removeMonitor(localEscapeMonitor)
+                self.localEscapeMonitor = nil
             }
             audioRecorder.stopSessionIfIdle()
         }
@@ -602,21 +602,6 @@ struct MiniRecorderView: View {
                 handleEscape()
             })
         )
-        .alert("Accessibility Permission Required", isPresented: $showAccessibilityWarning) {
-            Button("Open Settings") {
-                if let url = URL(
-                    string:
-                        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-                ) {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-            Button("Continue Anyway", role: .cancel) {}
-        } message: {
-            Text(
-                "Accessibility is disabled. Transcribed text will be copied to clipboard but won't auto-paste into apps.\n\nEnable it in System Settings → Privacy & Security → Accessibility."
-            )
-        }
     }
 
     // MARK: - Subviews
@@ -794,6 +779,7 @@ struct MiniRecorderView: View {
 
     private func cancelRecording() {
         cancelCommit = true
+        if isStartingRecording { return }
 
         guard isListening || audioRecorder.isRecording else {
             isProcessing = false
@@ -826,20 +812,10 @@ struct MiniRecorderView: View {
             return
         }
 
-        guard !isListening else {
+        guard !isListening, !isStartingRecording else {
             debugLog("Already listening, ignoring duplicate start request")
             return
         }
-
-        // Warn (at most once) if accessibility is off — transcribed text still lands
-        // on the clipboard, we just can't auto-paste. Skipped entirely in DEBUG so
-        // frequent rebuilds (which reset the TCC grant) don't nag while testing.
-        #if !DEBUG
-            if !isAccessibilityEnabled && !hasShownAccessibilityWarning {
-                hasShownAccessibilityWarning = true
-                showAccessibilityWarning = true
-            }
-        #endif
 
         // Check if model is selected BEFORE starting recording
         guard !selectedModel.isEmpty else {
@@ -870,7 +846,10 @@ struct MiniRecorderView: View {
             return
         }
 
+        isStartingRecording = true
+        cancelCommit = false
         Task {
+            defer { isStartingRecording = false }
             let usesLiveStreaming = AIModel.engineKind(for: selectedModel) == .nemotron
             if usesLiveStreaming {
                 audioRecorder.setDirectStreamingEnabled(true)
@@ -904,9 +883,16 @@ struct MiniRecorderView: View {
                 startIncrementalSessionIfPossible()
             }
 
-            cancelCommit = false
+            guard !cancelCommit else {
+                await cancelRecordingStart()
+                return
+            }
             debugLog("Starting recording...")
             let didStart = await audioRecorder.startRecording()
+            guard !cancelCommit else {
+                await cancelRecordingStart()
+                return
+            }
             guard didStart else {
                 await cancelIncrementalSession()
                 audioRecorder.restoreDefaultChunkDuration()
@@ -919,6 +905,17 @@ struct MiniRecorderView: View {
             }
             isListening = true
         }
+    }
+
+    private func cancelRecordingStart() async {
+        _ = await audioRecorder.stopRecording(discardOutput: true)
+        await cancelIncrementalSession()
+        if isLiveStreaming { _ = try? await transcription.finishLiveTranscription() }
+        isLiveStreaming = false
+        audioRecorder.restoreDefaultChunkDuration()
+        audioRecorder.setDirectStreamingEnabled(false)
+        endWarmUp()
+        onCancel?()
     }
 
     private func selectAudioDevice(_ deviceId: String) {
@@ -963,6 +960,10 @@ struct MiniRecorderView: View {
 
     private func stopAndTranscribe() {
         debugLog("stopAndTranscribe called")
+        if isStartingRecording {
+            cancelCommit = true
+            return
+        }
 
         guard !isStopping else {
             debugLog("Stop already in progress, ignoring duplicate stop request")
@@ -1154,6 +1155,11 @@ struct MiniRecorderView: View {
     }
 
     private func handleEscape() {
+        NotificationCenter.default.post(name: .recordingHotkeyResetRequested, object: nil)
+        if isStartingRecording {
+            cancelCommit = true
+            return
+        }
         guard isListening || isProcessing || isWarmingUp else { return }
 
         debugLog("Escape pressed - cancelling immediate commit")

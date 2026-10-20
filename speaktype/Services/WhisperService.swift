@@ -48,6 +48,7 @@ class WhisperService {
     }()
 
     var pipe: WhisperKit?
+    private let workGate = TranscriptionWorkGate()
     var isInitialized = false
     var isTranscribing = false
     var isLoading = false
@@ -150,6 +151,9 @@ class WhisperService {
 
     @MainActor
     private func performModelLoad(variant: String) async throws {
+        await workGate.acquire()
+        defer { workGate.release() }
+        try Task.checkCancellation()
         let ramGB = Self.deviceRAMGB
         print("🔄 Initializing WhisperKit with model: \(variant)...")
         print("💻 Device RAM: \(ramGB) GB")
@@ -269,7 +273,7 @@ class WhisperService {
         do {
             let text = try await decode(audioPath: audioFile.path, language: language, pipe: pipe)
 
-            print("Transcription complete: \(text.prefix(50))...")
+        print("Transcription complete")
             return text
         } catch {
             print("Transcription failed: \(error.localizedDescription)")
@@ -294,7 +298,7 @@ class WhisperService {
 
         let text = try await decode(audioPath: audioFile.path, language: language, pipe: pipe)
 
-        print("🔪 Chunk done: \(text.prefix(40))...")
+        print("🔪 Chunk transcription complete")
         // Clean up temp chunk file after transcription
         try? FileManager.default.removeItem(at: audioFile)
         return text
@@ -303,8 +307,17 @@ class WhisperService {
     /// Runs one decode with the vocabulary prompt. A prompt can make Whisper
     /// decide the audio is already transcribed and stop immediately, so an
     /// empty prompted result is retried once without conditioning.
-    private func decode(audioPath: String, language: String, pipe: WhisperKit) async throws -> String {
-        let prompt = conditioningPrompt(for: language, pipe: pipe)
+    func transcribeMeetingAudio(_ audioFile: URL, language: String) async throws -> String {
+        guard let pipe, isInitialized else { throw TranscriptionError.notInitialized }
+        guard FileManager.default.fileExists(atPath: audioFile.path) else { throw TranscriptionError.fileNotFound }
+        return try await decode(audioPath: audioFile.path, language: language, pipe: pipe, useVocabularyPrompt: false)
+    }
+
+    private func decode(audioPath: String, language: String, pipe: WhisperKit, useVocabularyPrompt: Bool = true) async throws -> String {
+        await workGate.acquire()
+        defer { workGate.release() }
+        try Task.checkCancellation()
+        let prompt = useVocabularyPrompt ? conditioningPrompt(for: language, pipe: pipe) : nil
         let results = try await pipe.transcribe(
             audioPath: audioPath,
             decodeOptions: decodingOptions(for: language, promptTokens: prompt?.tokens)

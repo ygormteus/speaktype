@@ -43,6 +43,8 @@ struct MainView: View {
             TranscribeAudioView()
         case .history:
             HistoryView()
+        case .meetings:
+            MeetingListView()
         case .dictionary:
             DictionaryView()
         case .statistics:

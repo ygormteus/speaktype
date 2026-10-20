@@ -15,6 +15,7 @@ struct speaktypeApp: App {
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
     @AppStorage(AppLanguage.defaultsKey) private var appLanguage: AppLanguage = .system
+    @ObservedObject private var meetingCoordinator = MeetingCoordinator.shared
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
@@ -59,7 +60,7 @@ struct speaktypeApp: App {
         // to prevent SwiftUI from auto-opening the main dashboard on activation.
 
         // Menu Bar Extra (Always running listener)
-        MenuBarExtra("SpeakType", systemImage: "waveform", isInserted: $showMenuBarIcon) {
+        MenuBarExtra("SpeakType", systemImage: meetingCoordinator.manifest?.state == .recording ? "record.circle.fill" : "waveform", isInserted: $showMenuBarIcon) {
             ThemeProvider {
                 MenuBarDashboardView(
                     openDashboard: openDashboard,

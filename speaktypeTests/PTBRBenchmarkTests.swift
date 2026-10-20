@@ -59,6 +59,7 @@ final class PTBRBenchmarkTests: XCTestCase {
 
     func testPortugueseBenchmark() async throws {
         let env = ProcessInfo.processInfo.environment
+        let repetitions = min(5, max(1, Int(env["SPEAKTYPE_BENCH_REPETITIONS"] ?? "") ?? 1))
         guard let dirPath = env["SPEAKTYPE_BENCH_DIR"], !dirPath.isEmpty else {
             throw XCTSkip("Set SPEAKTYPE_BENCH_DIR to run the PT-BR benchmark")
         }
@@ -125,7 +126,7 @@ final class PTBRBenchmarkTests: XCTestCase {
 
             var clipResults: [ClipResult] = []
             var failure: String?
-            for clip in clips {
+            for clip in (0..<repetitions).flatMap({ _ in clips }) {
                 let start = Date()
                 do {
                     let text = try await manager.transcribe(audioFile: clip.audio, language: "pt")
@@ -145,7 +146,7 @@ final class PTBRBenchmarkTests: XCTestCase {
                 clips: clipResults, error: failure))
         }
 
-        let report = makeReport(
+        let report = "Repetições por áudio e modelo: \(repetitions)\n\n" + makeReport(
             results: results, clips: clips, directory: directory, notDownloaded: notDownloaded)
         print("\n" + report)
         let outURL = try outputURL(env: env)

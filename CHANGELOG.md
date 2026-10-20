@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
+- Add a separately selectable Whisper Turbo 20240930 export, preserving the legacy and Compacto models; support repeated local PT-BR benchmark runs.
+- Replace the shared AppKit global key-down observer with a passive, session-level Core Graphics listener after physical typing duplication recurred; preserve local event handling and legitimate repeats without replaying or swallowing keys.
+- Add a downloaded, language-compatible model picker to meeting setup, with explicit experimental fast PT-BR and higher-fidelity choices, separate from dictation preferences; keep the chosen model pinned in saved meetings.
+- Use short, validated local-summary source indices instead of model-copied UUIDs; normalize absent metadata and repeated citations without relaxing source validation. Add real Apple Intelligence regression checks for Portuguese microphone tests.
+- Share one native global key-down observer between Fn cancellation and recorder Escape handling; make recorder observer registration idempotent instead of adding overlapping global observers.
+- Use login-session auto-paste events with an explicit Command release instead of posting into hardware keyboard input; add event-sequence regression tests without sending real keystrokes.
+- Fix meeting audio conversion packet sizing; publish speech at pause boundaries instead of fixed 15-second blocks, omit dictation vocabulary prompts and suppress music-only transcript artifacts.
+- Simplify meetings into Transcript/Summary tabs with readable controls, microphone levels, explicit processing progress, saved-audio playback and full reprocessing.
+- Keep meeting models reserved until capture and decoding drain after failures; prevent playback during microphone capture or dictation.
+- Add manual in-person/online meetings with local Whisper transcription, durable audio segments, interruption recovery, PT-BR screens and Markdown export.
+- Add optional local Apple Intelligence summaries and explicitly confirmed text-only OpenAI summaries with a separate Keychain credential and configurable model.
+- Fix: missing Accessibility permission now shows actionable auto-paste instructions after dictation in all builds, keeping the transcript available for manual paste.
+- Optional Fn double-tap locks hands-free recording in Hold mode; press Fn again to finish or Esc to cancel. Includes Brazilian Portuguese settings text.
 - Models are now warmed up as soon as they finish downloading (and when you pick one), so the first dictation no longer stalls on "warming up".
 - Fix: the recorder's warming-up message was clipped mid-word, and pressing esc left it wedged on screen. It now shows the real loading stage, elapsed time, and settles back to idle.
 - Fix: the recommended model on the AI Models screen now shows download progress, a cancel button, and the actual reason a download failed (with a retry) instead of a Download button that appeared to do nothing.

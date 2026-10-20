@@ -84,6 +84,17 @@ struct AIModel: Identifiable, Equatable {
             expectedSizeBytes: 1_400_000_000,
             minimumRAMGB: 8
         ),
+        AIModel(
+            name: "Whisper Large v3 Turbo (2024)",
+            variant: "openai_whisper-large-v3-v20240930_turbo",
+            details: "Multilingual • Turbo 20240930 • Uncompressed",
+            rating: "Great",
+            size: "1.6 GB",
+            speed: 8.0,
+            accuracy: 9.2,
+            expectedSizeBytes: 1_400_000_000,
+            minimumRAMGB: 8
+        ),
         // Argmax's compressed (mixed-bit palettized) build of the Sep 2024 turbo
         // checkpoint: ~40% of the full model's size and faster to load/decode, at
         // a small accuracy cost. Downloads from argmaxinc/whisperkit-coreml.

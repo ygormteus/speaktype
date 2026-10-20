@@ -38,6 +38,36 @@ class TranscriptionManager {
 
     private init() {}
 
+    private(set) var meetingModelVariant: String?
+
+    func prepareMeeting(variant: String, language: String) async throws -> String {
+        guard meetingModelVariant == nil, !isLoading, !isTranscribing,
+              !AudioRecordingService.shared.isRecording else { throw MeetingError.busy }
+        let selected = variant.isEmpty ? UserDefaults.standard.string(forKey: ModelSelection.defaultsKey) ?? currentModelVariant : variant
+        let compatible = MeetingModelSelection.models(language: language, downloaded: Set(
+            AIModel.availableModels.filter { ModelDownloadService.shared.isDownloaded($0.variant) }.map(\.variant)))
+        guard let model = compatible.first(where: { $0.variant == selected }) ?? (variant.isEmpty ? compatible.first : nil) else {
+            throw MeetingError.unavailable(String(localized: "Download a multilingual Whisper model in AI Models before starting a meeting."))
+        }
+        meetingModelVariant = model.variant
+        do { try await loadModel(variant: model.variant) }
+        catch { meetingModelVariant = nil; throw error }
+        return model.variant
+    }
+
+    func releaseMeeting() { meetingModelVariant = nil }
+
+    func transcribeMeetingSegment(_ url: URL, language: String, variant: String) async throws -> String {
+        guard meetingModelVariant == variant, whisper.currentModelVariant == variant else { throw TranscriptionManagerError.modelChanged }
+        switch await Task.detached(operation: { AudioTrimmer.trimSilence(in: url) }).value {
+        case .silent: return ""
+        case .trimmed(let trimmed):
+            defer { try? FileManager.default.removeItem(at: trimmed) }
+            return try await whisper.transcribeMeetingAudio(trimmed, language: language)
+        case .unchanged: return try await whisper.transcribeMeetingAudio(url, language: language)
+        }
+    }
+
     /// Resolve the engine responsible for a given engine kind.
     private func engine(for kind: TranscriptionEngineKind) -> any SpeechToTextEngine {
         switch kind {
@@ -118,6 +148,9 @@ class TranscriptionManager {
     /// engine for the whole time a Parakeet model was warming up. The recorder
     /// never saw a load in progress and fell back to its truncated status text.
     func loadModel(variant: String) async throws {
+        if let meetingModelVariant, meetingModelVariant != variant {
+            throw MeetingError.unavailable(String(localized: "Finish the meeting transcription before changing the speech model."))
+        }
         let kind = AIModel.engineKind(for: variant)
         activeKind = kind
         try await engine(for: kind).loadModel(variant: variant)

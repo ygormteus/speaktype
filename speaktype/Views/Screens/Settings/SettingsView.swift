@@ -37,6 +37,8 @@ struct SettingsView: View {
                 AudioSettingsTab()
             case .permissions:
                 PermissionsSettingsTab()
+            case .meetingAI:
+                MeetingAISettingsView()
             }
         }
         .background(Color.clear)
@@ -47,6 +49,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
     case audio = "Audio"
     case permissions = "Permissions"
+    case meetingAI = "Meeting AI"
 
     var id: String { rawValue }
 
@@ -55,6 +58,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "General"
         case .audio: "Audio"
         case .permissions: "Permissions"
+        case .meetingAI: "Meeting AI"
         }
     }
 
@@ -63,6 +67,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .audio: return "mic"
         case .permissions: return "shield"
+        case .meetingAI: return "text.bubble"
         }
     }
 }
@@ -97,6 +102,7 @@ struct GeneralSettingsTab: View {
     @AppStorage(AppLanguage.defaultsKey) private var appLanguage: AppLanguage = .system
     @AppStorage("autoUpdate") private var autoUpdate = true
     @AppStorage("selectedHotkey") private var selectedHotkey: HotkeyOption = .fn
+    @AppStorage("fnDoubleTapEnabled") private var fnDoubleTapEnabled = false
     @AppStorage("recordingMode") private var recordingMode: Int = 0  // 0: Hold to record, 1: Toggle
     @AppStorage("restoreClipboardAfterAutoPaste") private var restoreClipboardAfterAutoPaste =
         true
@@ -226,6 +232,15 @@ struct GeneralSettingsTab: View {
                             .font(Typography.captionSmall)
                             .foregroundStyle(Color.textMuted)
                             .padding(.top, 2)
+
+                            if selectedHotkey == .fn && recordingMode == 0 {
+                                Toggle("Double-tap Fn for hands-free recording", isOn: $fnDoubleTapEnabled)
+                                    .font(Typography.bodyMedium)
+                                    .padding(.top, 8)
+                                Text("Tap Fn twice quickly to keep recording. Press Fn again to stop, or Esc to cancel. Holding Fn still works.")
+                                    .font(Typography.captionSmall)
+                                    .foregroundStyle(Color.textMuted)
+                            }
                         }
 
                     }

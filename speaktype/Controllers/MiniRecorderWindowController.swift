@@ -147,6 +147,7 @@ class MiniRecorderWindowController: NSObject {
     /// Return the pill to its passive resting state. When "always show" is off
     /// (the default) this hides the recorder so it only appears while dictating.
     private func returnToIdle() {
+        NotificationCenter.default.post(name: .recordingHotkeyResetRequested, object: nil)
         guard let panel = panel else { return }
         panel.ignoresMouseEvents = true
         if !alwaysShowIdlePill {
@@ -257,29 +258,21 @@ class MiniRecorderWindowController: NSObject {
                 return
             }
 
-            // 1. Copy to clipboard for manual paste, or snapshot it first if the user wants it restored.
-            let previousClipboard: ClipboardService.ClipboardSnapshot?
-            if shouldRestoreClipboardAfterAutoPaste {
-                previousClipboard = ClipboardService.shared.copyForTemporaryPaste(text: finalText)
-            } else {
-                previousClipboard = nil
-                ClipboardService.shared.copy(text: finalText)
-            }
-
-            // 2. Settle the pill back to its resting state (keep it on screen).
-            await MainActor.run {
+            let preparation = await MainActor.run {
+                let preparation = ClipboardService.shared.prepareAutoPaste(
+                    text: finalText, restoreClipboard: self.shouldRestoreClipboardAfterAutoPaste)
                 self.returnToIdle()
+                return preparation
             }
 
-            // 3. Check accessibility - if not granted, just copy to clipboard silently
-            let accessibilityTrusted = ClipboardService.shared.isAccessibilityTrusted
-
-            if !accessibilityTrusted {
-                // Text is already copied to clipboard, just return
-                // Don't show annoying popup - user can paste manually with Cmd+V
-                print(
-                    "⚠️ Accessibility not granted - text copied to clipboard, user can paste with Cmd+V"
-                )
+            let previousClipboard: ClipboardService.ClipboardSnapshot?
+            switch preparation {
+            case .ready(let snapshot):
+                previousClipboard = snapshot
+            case .requiresAccessibility:
+                await MainActor.run {
+                    self.showAccessibilityAlert()
+                }
                 return
             }
 
@@ -360,11 +353,11 @@ class MiniRecorderWindowController: NSObject {
 
     private func showAccessibilityAlert() {
         let alert = NSAlert()
-        alert.messageText = "Accessibility Permission Required"
+        alert.messageText = NSLocalizedString("Accessibility Permission Required", comment: "Auto-paste permission alert title")
         alert.informativeText =
-            "SpeakType needs Accessibility permission to automatically paste transcriptions into the active app.\n\nYour transcription has been copied to the clipboard.\n\nTo enable auto-paste, grant permission in:\nSystem Settings → Privacy & Security → Accessibility"
+            NSLocalizedString("SpeakType needs Accessibility permission to automatically paste transcriptions into the active app.\n\nYour transcription has been copied to the clipboard.\n\nTo enable auto-paste, grant permission in:\nSystem Settings → Privacy & Security → Accessibility", comment: "Auto-paste permission instructions")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: NSLocalizedString("Open System Settings", comment: "Open accessibility settings"))
         alert.addButton(withTitle: "OK")
 
         let response = alert.runModal()

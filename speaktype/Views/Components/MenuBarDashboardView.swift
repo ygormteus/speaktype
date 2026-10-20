@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuBarDashboardView: View {
     @StateObject private var historyService = HistoryService.shared
+    @ObservedObject private var meetingCoordinator = MeetingCoordinator.shared
 
     let openDashboard: () -> Void
     let quit: () -> Void
@@ -35,6 +36,16 @@ struct MenuBarDashboardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            if let meeting = meetingCoordinator.manifest {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(meeting.state.title, systemImage: "record.circle.fill")
+                        .foregroundStyle(meeting.state == .recording ? .red : .secondary)
+                    Text(meeting.title).font(.callout).lineLimit(1)
+                    if meeting.state.isCapturing {
+                        Button("Stop meeting") { Task { await meetingCoordinator.stop() } }
+                    }
+                }
+            }
             statsGrid
             recentTranscriptsSection
             actionRow

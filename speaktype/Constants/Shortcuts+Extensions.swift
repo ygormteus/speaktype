@@ -11,6 +11,7 @@ extension Notification.Name {
     static let recordingStartRequested = Notification.Name("recordingStartRequested")
     static let recordingStopRequested = Notification.Name("recordingStopRequested")
     static let recordingCancelRequested = Notification.Name("recordingCancelRequested")
+    static let recordingHotkeyResetRequested = Notification.Name("recordingHotkeyResetRequested")
     /// Posted when the "always show recorder pill" preference changes so the
     /// window controller can show/hide the idle pill immediately.
     static let recorderIdleVisibilityChanged = Notification.Name("recorderIdleVisibilityChanged")

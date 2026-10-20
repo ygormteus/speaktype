@@ -39,9 +39,11 @@ class AudioPlayerService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     
     /// Start or resume playback
     func play() {
+        guard !AudioRecordingService.shared.isRecording,
+              !MeetingCoordinator.shared.isCapturingAudio else { return }
         guard let player = audioPlayer else { return }
-        player.play()
-        isPlaying = true
+        isPlaying = player.play()
+        guard isPlaying else { return }
         startTimer()
     }
     

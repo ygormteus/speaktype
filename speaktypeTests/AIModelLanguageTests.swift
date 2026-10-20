@@ -2,6 +2,15 @@ import XCTest
 @testable import speaktype
 
 final class AIModelLanguageTests: XCTestCase {
+    func testVersionedTurboIsSeparatelySelectableWithoutReplacingLegacyVariant() throws {
+        let versioned = try XCTUnwrap(AIModel.availableModels.first { $0.variant == "openai_whisper-large-v3-v20240930_turbo" })
+        XCTAssertEqual(versioned.engine, .whisper)
+        XCTAssertTrue(versioned.supports(spokenLanguage: "pt"))
+        XCTAssertTrue(versioned.supports(spokenLanguage: "en"))
+        XCTAssertTrue(AIModel.availableModels.contains { $0.variant == "openai_whisper-large-v3_turbo" })
+        XCTAssertEqual(Set(AIModel.availableModels.map(\.variant)).count, AIModel.availableModels.count)
+    }
+
     func testEnglishOnlyModelsAreExcludedForPortugueseAndAutoDetect() {
         let englishOnly = try! XCTUnwrap(
             AIModel.availableModels.first(where: { $0.variant == "openai_whisper-small.en" })
