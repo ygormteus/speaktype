@@ -38,10 +38,16 @@ enum LocalTranscriptFormatter {
         if language.lowercased().hasPrefix("pt") {
             fillers += ["ãh+", "ahn+", "hã+", "hum+", "éé+", "eee+"]
         }
+        // Only a clause mark directly after the filler belongs to it ("hum,
+        // a reunião"); a sentence mark ("sim hum. Depois") is kept and moves
+        // onto the previous word below.
         let pattern = #"(?i)(^|[\s,.;:!?])(?:"# + fillers.joined(separator: "|")
-            + #")(?=$|[\s,.;:!?])[,.;:!?]?"#
+            + #")(?=$|[\s,.;:!?])[,;:]?"#
         var result = text.replacingOccurrences(of: pattern, with: "$1", options: .regularExpression)
         result = result.replacingOccurrences(of: #"\s+([,.;:!?])"#, with: "$1", options: .regularExpression)
+        // "vamos, hum." → "vamos,." → "vamos."
+        result = result.replacingOccurrences(of: #"[,;:]+([.!?])"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"^[,;:.!?]+\s*"#, with: "", options: .regularExpression)
         result = result.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -54,7 +60,7 @@ enum LocalTranscriptFormatter {
     private static func formattingNotes(_ text: String) -> String {
         var result = applyingSpokenBreaks(to: text)
         result = result.replacingOccurrences(
-            of: #"(?i)\b(?:novo item|próximo item|proximo item|new item|next item)\b\s*"#,
+            of: #"(?i)\b(?:novo item|próximo item|proximo item|new item|next item)\b[,.;:!?…]?\s*"#,
             with: "\n• ",
             options: .regularExpression
         )
@@ -84,12 +90,12 @@ enum LocalTranscriptFormatter {
 
     private static func applyingSpokenBreaks(to text: String) -> String {
         var result = text.replacingOccurrences(
-            of: #"(?i)\b(?:novo parágrafo|novo paragrafo|new paragraph)\b\s*"#,
+            of: #"(?i)\b(?:novo parágrafo|novo paragrafo|new paragraph)\b[,.;:!?…]?\s*"#,
             with: "\n\n",
             options: .regularExpression
         )
         result = result.replacingOccurrences(
-            of: #"(?i)\b(?:nova linha|new line)\b\s*"#,
+            of: #"(?i)\b(?:nova linha|new line)\b[,.;:!?…]?\s*"#,
             with: "\n",
             options: .regularExpression
         )

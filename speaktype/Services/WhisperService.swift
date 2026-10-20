@@ -409,7 +409,9 @@ class WhisperService {
             if comparisonKey(candidate) == textKey { return "" }
         }
 
-        if let range = text.range(
+        // Prefix stripping needs the "Termos:" label: a bare term list ("Notion.")
+        // is also how real speech can start ("Notion. Abre a página…").
+        if prompt.hasPrefix("Termos:"), let range = text.range(
             of: prompt, options: [.anchored, .caseInsensitive, .diacriticInsensitive])
         {
             return String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)

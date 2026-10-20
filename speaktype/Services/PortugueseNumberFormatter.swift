@@ -100,14 +100,46 @@ enum PortugueseNumberFormatter {
     private static let currencies: [String: String] = [
         "real": "R$", "reais": "R$", "dolar": "US$", "dolares": "US$", "euro": "€", "euros": "€",
     ]
+    /// Matched against the lowercased token with its accents, so "metrô"
+    /// (the subway) is not the unit "metro". Unaccented spellings of
+    /// accented units ("quilometros") are listed because ASR emits them.
     private static let measurementUnits: Set<String> = [
         "centavo", "centavos",
         "quilo", "quilos", "quilograma", "quilogramas", "kg", "grama", "gramas",
-        "metro", "metros", "quilometro", "quilometros", "km", "centimetro", "centimetros",
-        "milimetro", "milimetros", "litro", "litros", "mililitro", "mililitros",
+        "metro", "metros", "quilômetro", "quilômetros", "quilometro", "quilometros", "km",
+        "centímetro", "centímetros", "centimetro", "centimetros",
+        "milímetro", "milímetros", "milimetro", "milimetros",
+        "litro", "litros", "mililitro", "mililitros",
         "grau", "graus", "polegada", "polegadas",
         "megabyte", "megabytes", "gigabyte", "gigabytes", "terabyte", "terabytes",
     ]
+
+    /// Words that may follow "um real" when it is money ("um real cada",
+    /// "um real pelo pão"). Any other word makes "real" an adjective ("um
+    /// real problema").
+    private static let realAmountFollowers: Set<String> = [
+        "e", "cada", "por", "pelo", "pela", "de", "do", "da", "a", "o", "no", "na", "so",
+        "apenas", "ou", "mais", "menos", "que", "para", "pra", "com", "sem", "em",
+    ]
+
+    /// Before a year-range value these make it a year even when a word
+    /// follows ("em dois mil e dez eu mudei", "desde dois mil e dez trabalho").
+    private static let yearIntroducers: Set<String> = ["em", "desde", "ate", "ano", "anos"]
+
+    /// Words that may follow a year without making it a count of things
+    /// ("dois mil e vinte e seis foi um ano difícil").
+    private static let yearFollowers: Set<String> = [
+        "foi", "era", "e", "sera", "vai", "esta", "estava", "tem", "teve", "trouxe", "vem",
+        "veio", "comecou", "acabou", "marcou", "eu", "ele", "ela", "nos", "eles", "elas",
+        "voce", "voces", "a", "o", "os", "as", "que", "quando", "ja", "ainda", "nao",
+        "mudamos", "fomos", "tivemos", "fizemos", "foram", "seria", "inteiro",
+        "todo", "toda", "passado", "ate", "em", "no", "na", "com", "por", "para",
+        "pra", "de", "do", "da",
+    ]
+
+    private static func isMeasurementUnit(_ index: Int, parser p: Parser) -> Bool {
+        p.linked(index) && measurementUnits.contains(p.tokens[index].text.lowercased())
+    }
 
     // MARK: - Tokens
 
@@ -345,11 +377,14 @@ enum PortugueseNumberFormatter {
             return ("\(numberText)%", index + 1)
         }
 
-        // Currency.
+        // Currency. Real/dólar/euro are masculine, so "uma real possibilidade"
+        // uses "real" as an adjective; so does "um real problema".
+        let isFeminine = !isDigits && (i..<index).contains { feminineWords.contains(p.tokens[$0].folded) }
         var currencyIndex = index
         if isScaled, p.linked(index), p.word(index) == "de" { currencyIndex = index + 1 }
         if p.linked(currencyIndex), let symbol = p.word(currencyIndex).flatMap({ currencies[$0] }),
-           !token.followsSymbol {
+           !token.followsSymbol, !isFeminine,
+           !isAdjectiveReal(at: currencyIndex, wordCount: wordCount, isDigits: isDigits, parser: p) {
             var amount = numberText
             var end = currencyIndex + 1
             if let decimalText {
@@ -363,7 +398,7 @@ enum PortugueseNumberFormatter {
 
         guard !isDigits else { return nil }
 
-        let followedByUnit = p.linked(index) && measurementUnits.contains(p.word(index) ?? "")
+        let followedByUnit = isMeasurementUnit(index, parser: p)
         if decimalText != nil || followedByUnit {
             return (numberText, index)
         }
@@ -373,11 +408,40 @@ enum PortugueseNumberFormatter {
         let isLoneSmallWord = wordCount == 1 && (parsedValue <= 10 || p.word(i) == "mil")
         guard !isLoneSmallWord else { return nil }
 
-        let isFeminine = (i..<index).contains { feminineWords.contains(p.tokens[$0].folded) }
-        if !isScaled, !isFeminine, (1900...2100).contains(parsedValue) {
+        // "mil e uma utilidades/noites" is an idiom, not 1.001.
+        if wordCount == 2, p.word(i) == "mil", p.word(index - 1) == "uma",
+           p.linked(index), !p.isNumberWord(index) {
+            return nil
+        }
+
+        if !isScaled, !isFeminine, (1900...2100).contains(parsedValue),
+           isYearContext(start: i, end: index, parser: p) {
             return (String(parsedValue), index)
         }
         return (numberText, index)
+    }
+
+    /// A 1900...2100 value is a year when it stands alone or before
+    /// punctuation ("dois mil.", "o ano de dois mil"), after "em"/"desde"/
+    /// "até"/"ano", or before a verb/function word ("dois mil e vinte e seis
+    /// foi..."). Before a noun it counts things: "dois mil funcionários" →
+    /// "2.000 funcionários".
+    private static func isYearContext(start: Int, end: Int, parser p: Parser) -> Bool {
+        guard p.linked(end), let next = p.word(end) else { return true }
+        if start > 0, p.linked(start), let previous = p.word(start - 1), yearIntroducers.contains(previous) {
+            return true
+        }
+        return yearFollowers.contains(next)
+    }
+
+    /// "um real problema": singular "real" after a lone "um" followed by a
+    /// word that cannot continue a money amount.
+    private static func isAdjectiveReal(at index: Int, wordCount: Int, isDigits: Bool, parser p: Parser) -> Bool {
+        guard !isDigits, wordCount == 1, p.word(index) == "real",
+              p.linked(index + 1), let next = p.word(index + 1),
+              !p.isNumberWord(index + 1), !isDigitToken(p.tokens[index + 1].text)
+        else { return false }
+        return !realAmountFollowers.contains(next)
     }
 
     /// "quinze para as três" is a clock time; leave it spoken.
@@ -412,12 +476,28 @@ enum PortugueseNumberFormatter {
             return nil
         }
         let fraction = singleDigitRun(at: i, parsed: parsed, parser: p)
+        // "eram quinze vírgula um deles reclamou": a lone "um"/"uma" after a
+        // spoken comma is an article unless a number context follows.
+        if fraction.end == i + 1, ["um", "uma"].contains(p.word(i) ?? ""),
+           p.linked(i + 1), !continuesNumberContext(at: i + 1, parser: p) {
+            return nil
+        }
         // "um vírgula dois vírgula três" is a spoken list, not a decimal.
         if p.linked(fraction.end), p.word(fraction.end) == "virgula",
            p.linked(fraction.end + 1), p.isNumberWord(fraction.end + 1) || isDigitToken(p.tokens[fraction.end + 1].text) {
             return nil
         }
         return fraction
+    }
+
+    /// The token at `i` is a number, unit, currency or percent word.
+    private static func continuesNumberContext(at i: Int, parser p: Parser) -> Bool {
+        guard let w = p.word(i) else { return false }
+        if p.isNumberWord(i) || isDigitToken(p.tokens[i].text) || currencies[w] != nil
+            || isMeasurementUnit(i, parser: p) || w == "porcento" || w == "virgula" {
+            return true
+        }
+        return w == "por" && p.linked(i + 1) && p.word(i + 1) == "cento"
     }
 
     private static func singleDigitRun(at i: Int, parsed: Parsed, parser p: Parser) -> (digits: String, end: Int) {
