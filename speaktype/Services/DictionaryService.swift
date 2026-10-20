@@ -282,6 +282,44 @@ final class DictionaryService: ObservableObject {
         return result
     }
 
+    // MARK: - Vocabulary hints for the recognizer
+
+    /// Replacement terms that look like vocabulary (names, products, acronyms),
+    /// used to bias Whisper's decoding toward the user's spellings. Safe to call
+    /// from any thread — it reads the rules straight from `UserDefaults`.
+    static func vocabularyHints(limit: Int = 40) -> [String] {
+        guard let data = UserDefaults.standard.data(forKey: saveKey),
+              let entries = try? JSONDecoder().decode([DictionaryEntry].self, from: data)
+        else { return [] }
+        return vocabularyHints(from: entries, limit: limit)
+    }
+
+    /// Pure core of `vocabularyHints(limit:)`. Snippet-style expansions (long
+    /// text, multi-line blocks, e-mails, URLs, sentences) are skipped because
+    /// they would waste Whisper's small prompt budget without helping recognition.
+    static func vocabularyHints(from entries: [DictionaryEntry], limit: Int = 40) -> [String] {
+        guard limit > 0 else { return [] }
+        var seen = Set<String>()
+        var hints: [String] = []
+        for entry in entries where entry.isEnabled {
+            let term = entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !term.isEmpty,
+                  term.count <= 40,
+                  !term.contains(where: \.isNewline),
+                  !term.contains("@"),
+                  !term.contains("://"),
+                  term.split(whereSeparator: \.isWhitespace).count <= 4,
+                  term.contains(where: \.isLetter)
+            else { continue }
+
+            let key = term.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            guard seen.insert(key).inserted else { continue }
+            hints.append(term)
+            if hints.count == limit { break }
+        }
+        return hints
+    }
+
     /// Word-boundary-aware, case-insensitive replacement. Spaces in the trigger
     /// match any run of whitespace, so multi-word phrases survive minor spacing
     /// differences. Matching is always case-insensitive because the recognizer,

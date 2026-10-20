@@ -16,6 +16,32 @@ enum NemotronCatalog {
     static let variants = [fastVariant, balancedVariant, qualityVariant]
     static let languageCode = "pt-BR"
 
+    /// Maps the app's language setting to a Nemotron prompt code.
+    ///
+    /// The model's `metadata.json` `prompt_dictionary` maps the bare code
+    /// `"pt"` to the *European* Portuguese prompt (`pt: 13 == pt-PT`, while
+    /// `pt-BR: 12`), and the app stores the spoken language as bare `"pt"`.
+    /// Passing it through unchanged silently dictated with the pt-PT prompt.
+    /// Only an explicit regional code (e.g. `"pt-PT"`) is honoured; anything
+    /// else — `"auto"`, `"pt"`, empty — resolves to Brazilian Portuguese.
+    static func promptLanguage(for language: String) -> String {
+        let normalized = language.replacingOccurrences(of: "_", with: "-")
+        let parts = normalized.split(separator: "-", maxSplits: 1).map(String.init)
+        if parts.count == 2, parts[0].lowercased() == "pt", !parts[1].isEmpty {
+            return "pt-" + parts[1].uppercased()
+        }
+        return languageCode
+    }
+
+    /// Audio samples FluidAudio consumes per encoder step for `variant`
+    /// (16 kHz mono). `StreamingNemotronMultilingualAsrManager.process(samples:)`
+    /// buffers internally and only runs whole chunks of this size, so callers
+    /// may push any size; pushing a divisor of this keeps chunk boundaries
+    /// aligned with pushes (no added latency).
+    static func chunkSamples(for variant: String) -> Int? {
+        chunkMilliseconds(for: variant).map { $0 * 16 }
+    }
+
     static func chunkMilliseconds(for variant: String) -> Int? {
         switch variant {
         case fastVariant: return 560
@@ -93,7 +119,7 @@ final class NemotronStreamingEngine: SpeechToTextEngine {
         partialTranscript = ""
         processingDuration = 0
         await manager.reset()
-        await manager.setLanguage(language == "auto" ? NemotronCatalog.languageCode : language)
+        await manager.setLanguage(NemotronCatalog.promptLanguage(for: language))
     }
 
     func append(audioFile: URL) async throws {
