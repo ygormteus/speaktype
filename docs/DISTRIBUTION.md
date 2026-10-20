@@ -17,9 +17,12 @@ texto aberto em outro aplicativo, inicie o ditado pelo atalho e solte-o.
 
 O pré-lançamento [v1.3.0-beta.20261020](https://github.com/ygormteus/speaktype/releases/tag/v1.3.0-beta.20261020)
 distribui `SpeakType-1.3.0-4c09df5-AppleSilicon-beta.dmg`, o checksum SHA-256
-e instruções de instalação. O binário Release arm64 corresponde ao código
-`4c09df5368ca82026ec3a5dd2804bbacdce15a91`; atende Macs Apple Silicon,
-incluindo M3. Os arquivos binários ficam nos anexos do GitHub Releases,
+e instruções de instalação. O binário Release arm64 foi compilado originalmente
+a partir de `4c09df5368ca82026ec3a5dd2804bbacdce15a91`. Após a correção apenas
+da coautoria no histórico, o commit equivalente é
+`d0073125fc05cbd60ac1a49719f907d796b8586b`, com árvore de arquivos idêntica.
+O nome e o checksum do instalador permanecem inalterados. O pacote atende
+Macs Apple Silicon, incluindo M3. Os arquivos binários ficam nos anexos do GitHub Releases,
 não no histórico Git; `dist/` continua ignorado.
 
 **É um pacote de teste com assinatura local ad hoc, sem Developer ID e sem
