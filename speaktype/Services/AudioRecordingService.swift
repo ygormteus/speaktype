@@ -3,14 +3,48 @@ import Combine
 import CoreMedia
 import Foundation
 
+/// A completed slice of the current recording, written to its own WAV file.
+nonisolated struct RecordedAudioChunk: Equatable {
+    let url: URL
+    /// 0-based position within the recording.
+    let index: Int
+    let duration: TimeInterval
+    /// False when the segmenter heard (almost) no speech in this chunk.
+    let hasSpeech: Bool
+}
+
+/// How the last recording was split into chunks. `chunkCount` counts every
+/// chunk that was closed, including ones whose file could not be written, so
+/// a consumer that received fewer chunks knows the chunks are incomplete.
+nonisolated struct RecordedChunkSummary: Equatable {
+    let chunkCount: Int
+    /// True if any captured buffer reached the full recording but not a chunk.
+    let hasGaps: Bool
+
+    var isUsable: Bool { !hasGaps && chunkCount > 0 }
+}
+
 class AudioRecordingService: NSObject, ObservableObject {
     static let shared = AudioRecordingService()  // Shared instance for settings/dashboard sync
 
-    // Chunk publisher: emits the URL of each completed ~4-second audio chunk while recording
-    let chunkPublisher = PassthroughSubject<URL, Never>()
+    // Chunk publisher: emits each completed audio chunk while recording, always
+    // on the main thread. Every chunk is delivered before `stopRecording`
+    // returns; `lastChunkSummary` then says how many there were.
+    let chunkPublisher = PassthroughSubject<RecordedAudioChunk, Never>()
     let livePCMChunkPublisher = PassthroughSubject<[Float], Never>()
     private static let defaultChunkDuration: TimeInterval = 4.0
     private var chunkDuration: TimeInterval = defaultChunkDuration
+    /// When true, chunks are cut at natural pauses by `SpeechSegmenter`
+    /// (incremental Whisper); otherwise every `chunkDuration` seconds.
+    private var speechSegmentedChunking = false
+    private var segmenter = SpeechSegmenter()
+    private var closedChunkCount = 0
+    private var chunkGapDetected = false
+    /// Tracks rotated chunk writers that are still finishing, so
+    /// `stopRecording` can wait until every chunk has been published.
+    private let chunkFinishGroup = DispatchGroup()
+    /// Chunking result of the most recent `stopRecording`.
+    private(set) var lastChunkSummary: RecordedChunkSummary?
     private var directStreamingEnabled = false
     private var directStreamingSamples: [Float] = []
     /// 560 ms at 16 kHz. FluidAudio buffers to the model chunk internally, so
@@ -52,7 +86,6 @@ class AudioRecordingService: NSObject, ObservableObject {
     private var chunkAssetWriter: AVAssetWriter?
     private var chunkAssetWriterInput: AVAssetWriterInput?
     private var chunkIsSessionStarted = false
-    private var chunkStartTime: Date?
     private var chunkFileURL: URL?
     private var isRotatingChunk = false  // Prevents concurrent rotations
     private var shouldDiscardCurrentRecordingOutput = false
@@ -74,6 +107,25 @@ class AudioRecordingService: NSObject, ObservableObject {
 
     func restoreDefaultChunkDuration() {
         setChunkDuration(Self.defaultChunkDuration)
+        setSpeechSegmentedChunking(false)
+    }
+
+    /// Cut chunks at speech pauses (see `SpeechSegmenter`) instead of fixed
+    /// intervals. Set before `startRecording`.
+    func setSpeechSegmentedChunking(_ enabled: Bool) {
+        audioQueue.async {
+            self.speechSegmentedChunking = enabled
+        }
+    }
+
+    /// Segmenter rules for the current mode. Fixed-interval mode reuses the
+    /// segmenter with min == max, so it only ever cuts on duration.
+    private func makeSegmenter() -> SpeechSegmenter {
+        guard !speechSegmentedChunking else { return SpeechSegmenter() }
+        var configuration = SpeechSegmenter.Configuration()
+        configuration.minimumChunkDuration = chunkDuration
+        configuration.maximumChunkDuration = chunkDuration
+        return SpeechSegmenter(configuration: configuration)
     }
 
     func setDirectStreamingEnabled(_ enabled: Bool) {
@@ -142,7 +194,6 @@ class AudioRecordingService: NSObject, ObservableObject {
         chunkAssetWriter = nil
         chunkAssetWriterInput = nil
         chunkIsSessionStarted = false
-        chunkStartTime = nil
         chunkFileURL = nil
         isRotatingChunk = false
     }
@@ -297,11 +348,17 @@ class AudioRecordingService: NSObject, ObservableObject {
         resetMainWriterState()
         resetChunkWriterState()
         directStreamingSamples.removeAll(keepingCapacity: true)
+        lastChunkSummary = nil
         isRecording = true
         recordingStartTime = Date()
-        // Hop onto audioQueue: idleSessionStopWorkItem is only ever touched there,
-        // and startRecording runs on the main thread.
-        audioQueue.async { self.cancelIdleSessionStop() }
+        // Hop onto audioQueue: idleSessionStopWorkItem and the chunking state
+        // are only ever touched there, and startRecording runs on the main thread.
+        audioQueue.async {
+            self.cancelIdleSessionStop()
+            self.segmenter = self.makeSegmenter()
+            self.closedChunkCount = 0
+            self.chunkGapDetected = false
+        }
 
         // 2. Wrap setup in a Task so stopRecording can wait for it
         setupTask = Task { @MainActor in
@@ -404,15 +461,26 @@ class AudioRecordingService: NSObject, ObservableObject {
             self.audioFrequency = 0.0
         }
 
-        return await withCheckedContinuation { continuation in
+        let result: StopResult = await withCheckedContinuation { continuation in
             audioQueue.async {
                 // --- Finalize the last in-flight chunk ---
                 let finishGroup = DispatchGroup()
                 var finalizedRecordingURL: URL?
+                var finalChunk: RecordedAudioChunk?
                 let discardOutput = self.shouldDiscardCurrentRecordingOutput
+                // The PCM tail is handed back to the caller's actor below
+                // instead of being posted asynchronously, so it is delivered
+                // before this method returns.
+                var pcmTail: [Float] = []
                 if self.directStreamingEnabled, !discardOutput {
-                    self.flushDirectStreamingSamples()
+                    pcmTail = self.takeDirectStreamingTail()
+                } else {
+                    self.directStreamingSamples.removeAll(keepingCapacity: true)
                 }
+
+                // Rotated chunks still finishing must publish before we return.
+                finishGroup.enter()
+                self.chunkFinishGroup.notify(queue: self.audioQueue) { finishGroup.leave() }
 
                 if let lastChunkInput = self.chunkAssetWriterInput,
                     let lastChunkWriter = self.chunkAssetWriter,
@@ -420,6 +488,9 @@ class AudioRecordingService: NSObject, ObservableObject {
                     self.chunkIsSessionStarted
                 {
                     self.resetChunkWriterState()
+                    let stats = self.segmenter.finishChunk()
+                    let index = self.closedChunkCount
+                    self.closedChunkCount += 1
 
                     finishGroup.enter()
                     lastChunkInput.markAsFinished()
@@ -433,13 +504,18 @@ class AudioRecordingService: NSObject, ObservableObject {
                                 label: "Final chunk"
                             ) {
                                 print("🔪 Final chunk saved: \(validChunkURL.lastPathComponent)")
-                                self.chunkPublisher.send(validChunkURL)
+                                finalChunk = self.makeChunk(url: validChunkURL, index: index, stats: stats)
                             } else {
                                 try? FileManager.default.removeItem(at: lastChunkURL)
                             }
                             finishGroup.leave()
                         }
                     }
+                } else if let unusedChunkURL = self.chunkFileURL {
+                    // A writer opened by the last rotation that never received audio.
+                    self.chunkAssetWriter?.cancelWriting()
+                    self.resetChunkWriterState()
+                    try? FileManager.default.removeItem(at: unusedChunkURL)
                 }
 
                 // --- Finalize main (full) recording ---
@@ -477,10 +553,40 @@ class AudioRecordingService: NSObject, ObservableObject {
                     self.captureSession?.stopRunning()
                     self.isStopping = false
                     self.shouldDiscardCurrentRecordingOutput = false
-                    continuation.resume(returning: finalizedRecordingURL)
+                    let summary = RecordedChunkSummary(
+                        chunkCount: self.closedChunkCount, hasGaps: self.chunkGapDetected)
+                    continuation.resume(returning: StopResult(
+                        url: finalizedRecordingURL, finalChunk: finalChunk,
+                        pcmTail: pcmTail, chunkSummary: summary))
                 }
             }
         }
+
+        // Deliver the tail synchronously on the main actor: subscribers run
+        // inside `send`, so anything they enqueue exists before we return.
+        // Rotated chunks were posted to the main queue before the continuation
+        // resumed, so they still arrive in capture order ahead of these.
+        await MainActor.run {
+            if !result.pcmTail.isEmpty { self.livePCMChunkPublisher.send(result.pcmTail) }
+            if let finalChunk = result.finalChunk { self.chunkPublisher.send(finalChunk) }
+            self.lastChunkSummary = discardOutput ? nil : result.chunkSummary
+        }
+        return result.url
+    }
+
+    private struct StopResult {
+        let url: URL?
+        let finalChunk: RecordedAudioChunk?
+        let pcmTail: [Float]
+        let chunkSummary: RecordedChunkSummary
+    }
+
+    private func makeChunk(url: URL, index: Int, stats: SpeechSegmenter.ChunkStats)
+        -> RecordedAudioChunk
+    {
+        RecordedAudioChunk(
+            url: url, index: index, duration: stats.duration,
+            hasSpeech: segmenter.hasSpeech(stats))
     }
 
     private func hasMicrophoneAccess() async -> Bool {
@@ -569,15 +675,18 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
         // Only process audio when actually recording (saves CPU)
         guard isRecording else { return }
 
-        processAudioLevel(from: sampleBuffer)
+        let rms = processAudioLevel(from: sampleBuffer) ?? 0
 
-        // Don't append if we're stopping - prevents race condition crash
+        // Don't append if we're stopping - prevents race condition crash.
+        // `isStopping` is set from another thread; read it once so a buffer
+        // goes either to both the full recording and the chunk, or to neither.
         guard !isStopping else { return }
         guard let writer = assetWriter, let input = assetWriterInput else { return }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
         // --- Main writer (full recording) ---
+        var appendedToRecording = false
         if writer.status == .writing {
             if !isSessionStarted {
                 writer.startSession(atSourceTime: pts)
@@ -585,51 +694,62 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
             }
 
             if input.isReadyForMoreMediaData {
-                guard !isStopping else { return }
-                input.append(sampleBuffer)
+                appendedToRecording = input.append(sampleBuffer)
             }
         }
 
         // --- Chunk writer (background segments) ---
-        appendToChunk(sampleBuffer: sampleBuffer, pts: pts)
+        appendToChunk(
+            sampleBuffer: sampleBuffer, pts: pts, rms: rms,
+            appendedToRecording: appendedToRecording)
     }
 
     // MARK: - Chunk Writer Helpers (audioQueue)
 
-    private func appendToChunk(sampleBuffer: CMSampleBuffer, pts: CMTime) {
+    /// Appends the buffer to the current chunk and closes the chunk when the
+    /// segmenter says so. Seams: the buffer that triggers a cut is the last
+    /// one in the closing chunk, and the next chunk's session starts at the
+    /// *next* buffer's PTS, so every buffer lands in exactly one chunk.
+    private func appendToChunk(
+        sampleBuffer: CMSampleBuffer, pts: CMTime, rms: Float, appendedToRecording: Bool
+    ) {
         guard !directStreamingEnabled else { return }
-        guard !isStopping else { return }
 
         // Initialize first chunk on first buffer
         if chunkAssetWriter == nil {
-            startNewChunkWriter(startingAt: pts)
+            startNewChunkWriter()
         }
 
-        guard let cw = chunkAssetWriter, let ci = chunkAssetWriterInput,
-            cw.status == .writing
-        else { return }
-
-        if !chunkIsSessionStarted {
-            cw.startSession(atSourceTime: pts)
-            chunkIsSessionStarted = true
-            chunkStartTime = Date()
+        var appendedToChunk = false
+        if let cw = chunkAssetWriter, let ci = chunkAssetWriterInput, cw.status == .writing {
+            if !chunkIsSessionStarted {
+                cw.startSession(atSourceTime: pts)
+                chunkIsSessionStarted = true
+            }
+            if ci.isReadyForMoreMediaData {
+                appendedToChunk = ci.append(sampleBuffer)
+            }
         }
-
-        if ci.isReadyForMoreMediaData {
-            guard !isStopping else { return }
-            ci.append(sampleBuffer)
+        // The chunks no longer add up to the full recording; consumers must
+        // fall back to transcribing the full file.
+        if appendedToRecording && !appendedToChunk {
+            chunkGapDetected = true
         }
+        guard appendedToChunk else { return }
 
-        // Rotate chunk after chunkDuration seconds
+        let sampleRate = CMSampleBufferGetFormatDescription(sampleBuffer)
+            .flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mSampleRate }
+            ?? 16_000
+        let duration = Double(CMSampleBufferGetNumSamples(sampleBuffer)) / max(1, sampleRate)
+
         guard !isRotatingChunk,
-            let start = chunkStartTime,
-            Date().timeIntervalSince(start) >= chunkDuration
+            let stats = segmenter.process(rms: rms, duration: duration)
         else { return }
 
-        rotateChunk(nextStartPTS: pts)
+        rotateChunk(stats: stats)
     }
 
-    private func startNewChunkWriter(startingAt pts: CMTime) {
+    private func startNewChunkWriter() {
         let url = getChunksDirectory().appendingPathComponent(
             "chunk-\(Date().timeIntervalSince1970).wav")
         chunkFileURL = url
@@ -656,7 +776,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
         chunkIsSessionStarted = false
     }
 
-    private func rotateChunk(nextStartPTS: CMTime) {
+    private func rotateChunk(stats: SpeechSegmenter.ChunkStats) {
         isRotatingChunk = true
 
         guard let oldWriter = chunkAssetWriter,
@@ -666,35 +786,49 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
             isRotatingChunk = false
             return
         }
+        let index = closedChunkCount
+        closedChunkCount += 1
+        let chunk = makeChunk(url: finishedURL, index: index, stats: stats)
 
         // Detach before finishing so new samples go to the fresh writer
         chunkAssetWriter = nil
         chunkAssetWriterInput = nil
         chunkIsSessionStarted = false
-        chunkStartTime = nil
         chunkFileURL = nil
 
         // Spin up the next chunk immediately so no audio is lost
-        startNewChunkWriter(startingAt: nextStartPTS)
+        startNewChunkWriter()
         isRotatingChunk = false
 
-        // Finish the old writer asynchronously
+        // Finish the old writer asynchronously. The group lets stopRecording
+        // wait until this chunk has been published.
+        chunkFinishGroup.enter()
         oldInput.markAsFinished()
-        oldWriter.finishWriting { [weak self] in
-            guard let self = self else { return }
-            if self.shouldDiscardCurrentRecordingOutput {
-                try? FileManager.default.removeItem(at: finishedURL)
-            } else {
-                print("🔪 Chunk saved: \(finishedURL.lastPathComponent)")
-                self.chunkPublisher.send(finishedURL)
+        oldWriter.finishWriting {
+            self.audioQueue.async {
+                defer { self.chunkFinishGroup.leave() }
+                if self.shouldDiscardCurrentRecordingOutput {
+                    try? FileManager.default.removeItem(at: finishedURL)
+                } else if self.validatedAudioFileURL(
+                    at: finishedURL, writer: oldWriter, label: "Chunk") != nil
+                {
+                    print("🔪 Chunk saved: \(finishedURL.lastPathComponent)")
+                    DispatchQueue.main.async { self.chunkPublisher.send(chunk) }
+                } else {
+                    // Its index is never delivered, which consumers detect.
+                    try? FileManager.default.removeItem(at: finishedURL)
+                }
             }
         }
     }
 
-    private func processAudioLevel(from sampleBuffer: CMSampleBuffer) {
+    /// Updates the level meter and returns the buffer's RMS (0…1), or nil if
+    /// the buffer could not be decoded.
+    @discardableResult
+    private func processAudioLevel(from sampleBuffer: CMSampleBuffer) -> Float? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
             let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee
-        else { return }
+        else { return nil }
 
         var audioBufferListSizeNeeded = 0
         var blockBuffer: CMBlockBuffer?
@@ -711,7 +845,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
             blockBufferOut: &blockBuffer
         )
 
-        guard sizeQueryStatus == noErr, audioBufferListSizeNeeded > 0 else { return }
+        guard sizeQueryStatus == noErr, audioBufferListSizeNeeded > 0 else { return nil }
 
         let audioBufferListStorage = UnsafeMutableRawPointer.allocate(
             byteCount: audioBufferListSizeNeeded,
@@ -732,7 +866,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
             blockBufferOut: &blockBuffer
         )
 
-        guard bufferListStatus == noErr else { return }
+        guard bufferListStatus == noErr else { return nil }
 
         let audioBuffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
         let sampleStride = 4
@@ -808,7 +942,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
             }
         }
 
-        guard processedSampleCount > 0 else { return }
+        guard processedSampleCount > 0 else { return nil }
 
         let rms = sqrt(sumSquares / Float(processedSampleCount))
 
@@ -851,6 +985,7 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
                     self.liveWaveSamples.count - Self.maxLiveWaveSamples)
             }
         }
+        return rms
     }
 
     private func emitDirectStreamingChunksIfReady() {
@@ -861,10 +996,10 @@ extension AudioRecordingService: AVCaptureAudioDataOutputSampleBufferDelegate {
         }
     }
 
-    private func flushDirectStreamingSamples() {
-        guard !directStreamingSamples.isEmpty else { return }
-        let chunk = directStreamingSamples
+    /// Removes and returns the samples not yet emitted as a full chunk.
+    private func takeDirectStreamingTail() -> [Float] {
+        let tail = directStreamingSamples
         directStreamingSamples.removeAll(keepingCapacity: true)
-        DispatchQueue.main.async { self.livePCMChunkPublisher.send(chunk) }
+        return tail
     }
 }
