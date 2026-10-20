@@ -258,6 +258,49 @@ final class PortugueseNumberFormatterTests: XCTestCase {
         XCTAssertTrue(PortugueseNumberFormatter.isEnabled)
     }
 
+    // MARK: - Regressions
+
+    func testMetroIsNotTheUnitMetro() {
+        assertFormats([
+            ("vou pegar um metrô", "vou pegar um metrô"),
+            ("dois metrôs lotados", "dois metrôs lotados"),
+            ("três metros", "3 metros"),
+            ("cinco quilometros", "5 quilometros"),
+        ])
+    }
+
+    func testRealAsAdjectiveIsNotCurrency() {
+        assertFormats([
+            ("é uma real possibilidade", "é uma real possibilidade"),
+            ("existe um real problema aqui", "existe um real problema aqui"),
+            ("custa um real cada", "custa R$ 1 cada"),
+            ("paguei um real pelo pão", "paguei R$ 1 pelo pão"),
+        ])
+    }
+
+    func testUmAfterVirgulaIsNotAFractionBeforeProse() {
+        assertFormats([
+            ("eram quinze vírgula um deles reclamou", "eram 15 vírgula um deles reclamou"),
+            ("três vírgula um", "3,1"),
+            ("três vírgula um por cento", "3,1%"),
+            ("dois vírgula um quilos", "2,1 quilos"),
+        ])
+    }
+
+    func testThousandsBeforeANounAreCountsNotYears() {
+        assertFormats([
+            ("dois mil funcionários", "2.000 funcionários"),
+            ("cerca de dois mil funcionários", "cerca de 2.000 funcionários"),
+            ("mil e novecentos alunos", "1.900 alunos"),
+            ("em dois mil e vinte e seis", "em 2026"),
+            ("o ano de dois mil", "o ano de 2000"),
+            ("desde dois mil e dez trabalho aqui", "desde 2010 trabalho aqui"),
+            ("dois mil e vinte e seis foi um ano difícil", "2026 foi um ano difícil"),
+            ("em dois mil e vinte e seis, mudamos", "em 2026, mudamos"),
+            ("mil e uma utilidades", "mil e uma utilidades"),
+        ])
+    }
+
     // MARK: - Helpers
 
     private func assertFormats(

@@ -15,22 +15,24 @@ enum VoiceCommandProcessor {
 
         var result = text
         result = result.replacingOccurrences(
-            of: #"(?i)\b(?:novo parágrafo|novo paragrafo|new paragraph)\b\s*"#,
+            of: #"(?i)\b(?:novo parágrafo|novo paragrafo|new paragraph)\b[,.;:!?…]?\s*"#,
             with: "\n\n", options: .regularExpression)
         result = result.replacingOccurrences(
-            of: #"(?i)\b(?:nova linha|new line)\b\s*"#,
+            of: #"(?i)\b(?:nova linha|new line)\b[,.;:!?…]?\s*"#,
             with: "\n", options: .regularExpression)
         result = result.replacingOccurrences(
-            of: #"(?i)\b(?:novo item|próximo item|proximo item|new item|next item)\b\s*"#,
+            of: #"(?i)\b(?:novo item|próximo item|proximo item|new item|next item)\b[,.;:!?…]?\s*"#,
             with: "\n• ", options: .regularExpression)
 
         // Destructive voice operations need an explicit command prefix, so a
         // person can still dictate the words naturally in ordinary prose.
-        let clearPattern = #"(?i)\b(?:comando\s+)?(?:limpar texto|clear text)\b\s*$"#
+        // Earlier stages may already have capitalized the command and closed
+        // it with a terminal mark ("Comando limpar texto."), so that is allowed.
+        let clearPattern = #"(?i)\b(?:comando\s+)?(?:limpar texto|clear text)\b\s*[.!?…]*\s*$"#
         if result.range(of: clearPattern, options: .regularExpression) != nil {
             return ""
         }
-        let deletePattern = #"(?i)\b(?:comando\s+)?(?:apagar última frase|apagar ultima frase|delete last sentence)\b\s*$"#
+        let deletePattern = #"(?i)\b(?:comando\s+)?(?:apagar última frase|apagar ultima frase|delete last sentence)\b\s*[.!?…]*\s*$"#
         if let range = result.range(of: deletePattern, options: .regularExpression) {
             result.removeSubrange(range)
             result = removingLastSentence(from: result)
@@ -42,8 +44,15 @@ enum VoiceCommandProcessor {
     }
 
     private static func removingLastSentence(from text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let boundary = trimmed.lastIndex(where: { ".!?\n".contains($0) }) else { return "" }
-        return String(trimmed[..<boundary]).trimmingCharacters(in: .whitespacesAndNewlines)
+        // The final sentence may or may not carry its own terminal mark
+        // ("Primeira. Segunda." / "primeira. segunda"); drop it first, then
+        // keep everything up to and including the previous sentence's mark.
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = trimmed.last, ".!?…".contains(last) || last.isWhitespace {
+            trimmed.removeLast()
+        }
+        guard let boundary = trimmed.lastIndex(where: { ".!?…\n".contains($0) }) else { return "" }
+        let kept = trimmed[boundary] == "\n" ? trimmed[..<boundary] : trimmed[...boundary]
+        return String(kept).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

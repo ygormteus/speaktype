@@ -141,6 +141,11 @@ final class WhisperServiceTests: XCTestCase {
             WhisperService.strippingPromptEcho(from: "Olá! Tudo bem?", prompt: prompt),
             "Olá! Tudo bem?")
         XCTAssertEqual(WhisperService.strippingPromptEcho(from: "SpeakType", prompt: nil), "SpeakType")
+        // A bare term list only strips an exact echo, never the start of real speech.
+        XCTAssertEqual(
+            WhisperService.strippingPromptEcho(from: "Notion. Open the tasks page", prompt: "Notion."),
+            "Notion. Open the tasks page")
+        XCTAssertEqual(WhisperService.strippingPromptEcho(from: "Notion.", prompt: "Notion."), "")
     }
 
     // MARK: - Decoding / compute options

@@ -35,6 +35,38 @@ final class VoiceCommandProcessorTests: XCTestCase {
         )
     }
 
+    func testEndAnchoredCommandsToleratePunctuationAndCapitalization() {
+        XCTAssertEqual(
+            VoiceCommandProcessor.apply(to: "Rascunho. Comando limpar texto.", language: "pt"),
+            ""
+        )
+        XCTAssertEqual(
+            VoiceCommandProcessor.apply(to: "Comando limpar texto!", language: "pt"),
+            ""
+        )
+        XCTAssertEqual(
+            VoiceCommandProcessor.apply(
+                to: "Primeira frase. Segunda frase. Apagar última frase.", language: "pt"),
+            "Primeira frase."
+        )
+        XCTAssertEqual(
+            VoiceCommandProcessor.apply(
+                to: "primeira frase. segunda frase comando apagar ultima frase", language: "pt"),
+            "primeira frase."
+        )
+    }
+
+    func testBreakCommandsConsumeFollowingPunctuation() {
+        XCTAssertEqual(
+            VoiceCommandProcessor.apply(to: "Primeiro novo parágrafo. Segundo.", language: "pt"),
+            "Primeiro\n\nSegundo."
+        )
+        XCTAssertEqual(
+            VoiceCommandProcessor.apply(to: "Primeiro, nova linha, segundo.", language: "pt"),
+            "Primeiro,\nsegundo."
+        )
+    }
+
     func testCanBeDisabled() {
         defaults.set(false, forKey: VoiceCommandProcessor.defaultsKey)
         XCTAssertEqual(

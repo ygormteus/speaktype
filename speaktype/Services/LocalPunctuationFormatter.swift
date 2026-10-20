@@ -102,8 +102,10 @@ enum LocalPunctuationFormatter {
             (#"(?i)(?<=\d)\s+(?:barra|slash)\s+(?=\d)"#, "/"),
             // A bare "ponto" is usually a noun ("ponto de ônibus", "esse é o
             // ponto"). It only means "." as the final word of the dictation
-            // and when it does not follow a determiner or preposition.
-            (#"(?i)(?<=\p{L})(?<!\b(?:"# + nounContext + #"))\s+ponto\s*$"#, "."),
+            // and when it does not follow a determiner or preposition. Numbers
+            // are formatted earlier, so a digit or "%" can precede it too
+            // ("R$ 50 ponto", "15% ponto").
+            (#"(?i)(?<=[\p{L}\p{N}%])(?<!\b(?:"# + nounContext + #"))\s+ponto\s*$"#, "."),
         ]
 
         return replacements.reduce(text) { partial, replacement in
@@ -172,8 +174,21 @@ enum LocalPunctuationFormatter {
             "como ja disse", "como já falei", "como ja falei", "como sempre", "como combinado",
             "como de costume", "como esperado", "como mencionado", "como prometido",
             "como você sabe", "como voce sabe", "como vocês sabem", "como voces sabem",
+            // "pode" usually opens a request, but these are fixed statements.
+            "pode deixar", "pode ser que", "pode ficar",
+            // Correlative comparison: "quanto mais cedo, melhor".
+            "quanto mais ", "quanto menos ",
+            // "onde eu moro faz frio": a place clause about the speaker. A
+            // question about the speaker's own home/work is rare, while
+            // "onde eu deixei a chave" (a real question) does not match.
+            "onde eu moro ", "onde eu morava ", "onde eu trabalho ", "onde eu trabalhava ",
+            "onde eu estudo ", "onde eu estudava ", "onde a gente mora ", "onde nós moramos ",
+            "onde moro ", "onde trabalho ",
         ]
         if statementOpeners.contains(where: { sentence.hasPrefix($0) }) {
+            return false
+        }
+        if isSubordinateClauseFollowedByMainClause(sentence) {
             return false
         }
         // "o que importa é isso" is a statement; "o que é isso" is not.
@@ -202,5 +217,34 @@ enum LocalPunctuationFormatter {
             "pra que ", "para que ",
         ]
         return prefixes.contains { sentence.hasPrefix($0) }
+    }
+
+    /// "quando você puder, me manda o arquivo", "como eu não sabia,
+    /// perguntei", "e se der errado, a gente refaz": a wh-word or "e se"
+    /// opens a subordinate clause that a comma closes before the main clause.
+    ///
+    /// Heuristic: the clause before the first comma has at least two words
+    /// after the opener (a bare "onde fica, exatamente, a estação" stays a
+    /// question) and the text after the comma is not a short afterthought
+    /// ("quem é você, afinal"). "como assim" is always a question.
+    private static func isSubordinateClauseFollowedByMainClause(_ sentence: String) -> Bool {
+        let openers = ["quando ", "como ", "onde ", "quanto ", "quantos ", "quantas ", "quem ", "e se "]
+        guard let opener = openers.first(where: { sentence.hasPrefix($0) }),
+              !sentence.hasPrefix("como assim"),
+              let comma = sentence.firstIndex(of: ",")
+        else {
+            return false
+        }
+        let clause = sentence[sentence.index(sentence.startIndex, offsetBy: opener.count)..<comma]
+        guard clause.split(whereSeparator: \.isWhitespace).count >= 2 else { return false }
+
+        let tail = sentence[sentence.index(after: comma)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        let afterthoughts: Set<String> = [
+            "afinal", "exatamente", "então", "entao", "hein", "mesmo", "agora", "hoje",
+            "amanhã", "amanha", "ontem", "aí", "ai", "lá", "la", "ali", "aqui", "mais ou menos",
+            "de novo", "por favor", "você", "voce", "vocês", "voces", "gente", "pessoal",
+        ]
+        return !tail.isEmpty && !afterthoughts.contains(tail)
     }
 }

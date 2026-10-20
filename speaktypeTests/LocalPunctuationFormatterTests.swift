@@ -119,6 +119,14 @@ final class LocalPunctuationFormatterTests: XCTestCase {
         assertPT("chegamos a um ponto", "chegamos a um ponto.")
     }
 
+    func testFinalPontoAfterNumbersAndSymbols() {
+        assertPT("o total foi R$ 50 ponto", "o total foi R$ 50.")
+        assertPT("subiu 15% ponto", "subiu 15%.")
+        assertPT("são 20 ponto", "são 20.")
+        assertPT("chegamos a um ponto", "chegamos a um ponto.")
+        assertPT("esse é o ponto", "esse é o ponto.")
+    }
+
     func testEnglishEquivalents() {
         withPreferences {
             XCTAssertEqual(
@@ -170,6 +178,24 @@ final class LocalPunctuationFormatterTests: XCTestCase {
             "para que todos entendam, vou explicar de novo",
             "para que todos entendam, vou explicar de novo.")
         assertPT("vocês fizeram um ótimo trabalho", "vocês fizeram um ótimo trabalho.")
+    }
+
+    func testSubordinateClausesFollowedByMainClauseAreStatements() {
+        assertPT(
+            "quando você puder, me manda o arquivo", "quando você puder, me manda o arquivo.")
+        assertPT("quanto mais cedo, melhor", "quanto mais cedo, melhor.")
+        assertPT("como eu não sabia, perguntei", "como eu não sabia, perguntei.")
+        assertPT("onde eu moro faz frio", "onde eu moro faz frio.")
+        assertPT("e se der errado, a gente refaz", "e se der errado, a gente refaz.")
+        assertPT("pode deixar que eu faço", "pode deixar que eu faço.")
+        assertPT("pode ser que chova amanhã", "pode ser que chova amanhã.")
+        assertPT("pode ficar tranquilo", "pode ficar tranquilo.")
+        // Still questions.
+        assertPT("como assim, você não vem", "como assim, você não vem?")
+        assertPT("onde fica, exatamente, a estação", "onde fica, exatamente, a estação?")
+        assertPT("quem é você, afinal", "quem é você, afinal?")
+        assertPT("onde você mora", "onde você mora?")
+        assertPT("pode me ajudar", "pode me ajudar?")
     }
 
     func testQuestionDetectionUsesTheFinalSentence() {

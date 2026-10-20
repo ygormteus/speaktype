@@ -72,6 +72,38 @@ final class LocalTranscriptFormatterTests: XCTestCase {
         }
     }
 
+    func testFillerRemovalKeepsSentencePunctuation() {
+        withPreferences(profile: .literal, autoEdit: true) {
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(
+                    to: "acho que sim hum. Depois a gente vê", language: "pt-BR"),
+                "acho que sim. Depois a gente vê"
+            )
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(to: "Então vamos, hum.", language: "pt-BR"),
+                "Então vamos."
+            )
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(to: "Será hum? Talvez", language: "pt-BR"),
+                "Será? Talvez"
+            )
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(to: "vamos, hum, depois", language: "pt-BR"),
+                "vamos, depois"
+            )
+        }
+    }
+
+    func testSpokenBreaksConsumeTheirOwnPunctuation() {
+        withPreferences(profile: .message) {
+            XCTAssertEqual(
+                LocalTranscriptFormatter.apply(
+                    to: "primeiro novo parágrafo. segundo.", language: "pt-BR"),
+                "Primeiro\n\nSegundo."
+            )
+        }
+    }
+
     func testPortugueseMeaningfulWordsAreKept() {
         withPreferences(profile: .literal, autoEdit: true) {
             for text in [
